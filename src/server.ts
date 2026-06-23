@@ -1,14 +1,11 @@
 // Bootstrap entrypoint.
 //
 // Builds the Fastify app (`app.ts`), binds the listening socket, and installs
-// graceful-shutdown handlers. Full env validation lives in `src/config/`
-// (next Phase 0 task); for now we read host/port with safe defaults so the
-// skeleton runs standalone.
+// graceful-shutdown handlers. Host/port come from validated config
+// (`src/config/`), which fails fast on invalid env before we get here.
 
 import { buildApp } from './app.js';
-
-const HOST = process.env.HOST ?? '0.0.0.0';
-const PORT = Number(process.env.PORT ?? 3000);
+import { config } from './config/index.js';
 
 async function start(): Promise<void> {
   const app = await buildApp();
@@ -29,7 +26,7 @@ async function start(): Promise<void> {
   }
 
   try {
-    await app.listen({ host: HOST, port: PORT });
+    await app.listen({ host: config.HOST, port: config.PORT });
   } catch (err) {
     app.log.error({ err }, 'failed to start server');
     process.exit(1);

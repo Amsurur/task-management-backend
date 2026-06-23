@@ -11,6 +11,7 @@
 
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { LoggerOptions } from 'pino';
+import { config, isDev } from './config/index.js';
 
 export interface BuildAppOptions {
   /** Pino logger options, or `false`/`true` to disable/enable the default logger. */
@@ -18,13 +19,13 @@ export interface BuildAppOptions {
 }
 
 /**
- * Sensible default logger config. Pretty-prints in development (via pino-pretty,
- * a dev dependency) and emits structured JSON everywhere else. Request IDs are
- * enabled by Fastify out of the box (`reqId` on every log line).
+ * Sensible default logger config derived from validated config. Pretty-prints in
+ * development (via pino-pretty, a dev dependency) and emits structured JSON
+ * everywhere else. Request IDs are enabled by Fastify out of the box (`reqId` on
+ * every log line).
  */
 function defaultLogger(): LoggerOptions | boolean {
-  const isDev = process.env.NODE_ENV !== 'production';
-  const level = process.env.LOG_LEVEL ?? (isDev ? 'debug' : 'info');
+  const level = config.LOG_LEVEL ?? (isDev ? 'debug' : 'info');
 
   if (isDev) {
     return {
