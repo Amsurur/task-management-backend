@@ -6,9 +6,9 @@
 
 ## Current Status
 
-- **Current Phase:** Phase 0 — Foundations
-- **Last Session:** 2026-06-23
-- **Next Task:** Phase 0 → Base plugins — pino logging, centralized error handler, `@fastify/swagger` at `/docs`
+- **Current Phase:** Phase 1 — MVP Core (Phase 0 complete)
+- **Last Session:** 2026-06-24
+- **Next Task:** Phase 1 → Prisma schema (User, Workspace, WorkspaceMember, Project, ProjectMember, State, Issue, IssueAssignee, Label, IssueLabel, Comment) + first migration
 
 ---
 
@@ -31,10 +31,10 @@ These lock the TZ §12 open questions (per `CLAUDE.md`). Do not re-litigate duri
 - [x] Fastify skeleton — `src/app.ts` (instance + plugin registration), `src/server.ts` (bootstrap/listen)
 - [x] Config/env parsing + validation at boot — `src/config/`
 - [x] Prisma init + Postgres via `docker-compose` (db + app services)
-- [ ] Base plugins — pino logging, centralized error handler, `@fastify/swagger` at `/docs`
+- [x] Base plugins — pino logging, centralized error handler, `@fastify/swagger` at `/docs`
 - [x] `GET /health` endpoint
-- [ ] Vitest + Supertest test harness
-- [ ] CI pipeline (lint + build + test)
+- [x] Vitest + Supertest test harness
+- [x] CI pipeline (lint + build + test)
 
 ## Phase 1 — MVP Core (launchable)
 

@@ -12,6 +12,8 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { LoggerOptions } from 'pino';
 import { config, isDev } from './config/index.js';
+import errorHandlerPlugin from './plugins/error-handler.js';
+import swaggerPlugin from './plugins/swagger.js';
 import prismaPlugin from './plugins/prisma.js';
 
 export interface BuildAppOptions {
@@ -54,8 +56,12 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   });
 
   // --- Plugins ---------------------------------------------------------------
-  // Data access. Base plugins (helmet, cors, rate-limit, swagger, error handler)
-  // register here in the "Base plugins" Phase 0 task.
+  // Order matters: the error handler is installed first so any later failure is
+  // rendered as the standard envelope; swagger registers before routes so it can
+  // capture their schemas; prisma decorates `app.prisma`. Security plugins
+  // (helmet, cors, rate-limit) are added in the Phase 4 hardening pass.
+  await app.register(errorHandlerPlugin);
+  await app.register(swaggerPlugin);
   await app.register(prismaPlugin);
 
   // --- Routes ----------------------------------------------------------------

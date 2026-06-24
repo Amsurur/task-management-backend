@@ -1,0 +1,36 @@
+// OpenAPI docs.
+//
+// Registers @fastify/swagger to build the OpenAPI document from each route's
+// JSON schema, and @fastify/swagger-ui to serve interactive docs at `/docs`.
+// Must be registered BEFORE the routes it should document. A bearer-auth scheme
+// is declared up front so Phase 1 auth-protected routes can reference it.
+
+import fp from 'fastify-plugin';
+import type { FastifyInstance } from 'fastify';
+import swagger from '@fastify/swagger';
+import swaggerUi from '@fastify/swagger-ui';
+
+async function swaggerPlugin(app: FastifyInstance): Promise<void> {
+  await app.register(swagger, {
+    openapi: {
+      info: {
+        title: 'Task Management API',
+        description: 'Plane/Jira-inspired multi-tenant task management REST API.',
+        version: '0.1.0',
+      },
+      servers: [{ url: '/api/v1', description: 'API v1 base path' }],
+      components: {
+        securitySchemes: {
+          bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+        },
+      },
+    },
+  });
+
+  await app.register(swaggerUi, {
+    routePrefix: '/docs',
+    uiConfig: { docExpansion: 'list', deepLinking: true },
+  });
+}
+
+export default fp(swaggerPlugin, { name: 'swagger' });
