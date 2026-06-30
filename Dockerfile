@@ -25,7 +25,9 @@ ENV NODE_ENV=production
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
-RUN npm install --omit=dev
+# Prod deps only, plus the Prisma CLI (a devDependency) so `migrate deploy`
+# can run at startup against the production database.
+RUN npm install --omit=dev && npm install prisma@5.22.0
 
 # Compiled app + generated Prisma client + schema (needed for migrate deploy).
 COPY --from=build /app/dist ./dist
@@ -35,4 +37,5 @@ COPY --from=build /app/src/prisma ./src/prisma
 
 USER node
 EXPOSE 3000
-CMD ["node", "dist/server.js"]
+# Apply pending migrations against the production DB, then start the server.
+CMD ["sh", "-c", "npx prisma migrate deploy --schema=src/prisma/schema.prisma && node dist/server.js"]
