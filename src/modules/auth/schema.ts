@@ -41,7 +41,8 @@ const userShape = {
   type: 'object',
   properties: {
     id: { type: 'string' },
-    email: { type: 'string' },
+    email: { type: 'string', nullable: true },
+    email_verified: { type: 'boolean' },
     display_name: { type: 'string' },
     avatar_url: { type: 'string', nullable: true },
     is_active: { type: 'boolean' },

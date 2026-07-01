@@ -76,9 +76,19 @@ export async function register(prisma: PrismaClient, body: RegisterBody): Promis
 export async function login(prisma: PrismaClient, body: LoginBody): Promise<AuthTokens> {
   const user = await prisma.user.findUnique({ where: { email: body.email } });
 
+  // Account exists but was created via OAuth/Telegram and never set a password
+  // (auth_tz.md §6): guide the user to their provider rather than a generic failure.
+  if (user && user.password_hash === null) {
+    throw AppError.badRequest(
+      'This account has no password. Sign in with Google or GitHub, or set a password first.',
+    );
+  }
+
   // Constant-time check on miss prevents timing-based account enumeration.
   const valid =
-    user !== null && (await argon2.verify(user.password_hash, body.password).catch(() => false));
+    user !== null &&
+    user.password_hash !== null &&
+    (await argon2.verify(user.password_hash, body.password).catch(() => false));
 
   if (!user || !valid) throw AppError.unauthorized('Invalid email or password');
   if (!user.is_active) throw AppError.forbidden('This account has been deactivated');

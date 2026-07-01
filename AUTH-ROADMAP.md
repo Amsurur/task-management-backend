@@ -9,9 +9,10 @@
 
 ## Current Status
 
-- **Current Phase:** Phase A0 — Data model & session foundations
-- **Last Session:** 2026-07-01 (roadmap created; no auth code written yet)
-- **Next Task:** Phase A0 → migrate `User` (nullable `email` / `password_hash`, add `email_verified`)
+- **Current Phase:** Phase A0 — Data model & session foundations (**7/9 done — 2 blocked by env**)
+- **Last Session:** 2026-07-01 (A0: schema + config + reconcile + helpers landed; verified via `prisma generate` + `tsc` + config unit test)
+- **Next Task:** Finish Phase A0 → (a) apply the `20260701130000_auth_multi_provider` migration once the DB is reachable, (b) wire the refresh `httpOnly` cookie (needs `@fastify/cookie` installed). Both blocked in the current offline/no-DB environment.
+- **Env blockers this run:** remote Postgres unreachable (P1001) → couldn't run `prisma migrate dev` or the integration test suite; npm registry unreachable (ETIMEDOUT) → couldn't `npm install @fastify/cookie` (also `@aws-sdk/*` is missing locally, so a full `npm run build` has 2 pre-existing errors in `src/lib/storage.ts` unrelated to auth).
 
 ---
 
@@ -40,15 +41,15 @@ Locked from `auth_tz.md` §9 and §1. Do not re-litigate during the build.
 
 ## Phase A0 — Data model & session foundations
 
-- [ ] Migrate `User`: make `email` nullable (keep unique), make `password_hash` nullable, add `email_verified Boolean @default(false)`
-- [ ] Reconcile existing `register` / `login` / `getMe` with now-nullable `email` / `password_hash` (no runtime breakage)
-- [ ] `AuthProvider` enum (`email | google | github | telegram`) + `AuthIdentity` model (`user_id`, `provider`, `provider_user_id`, `provider_email`, `created_at`, `UNIQUE(provider, provider_user_id)`)
-- [ ] `EmailOtp` model (`email`, `code_hash`, `purpose` signup|login, `expires_at`, `attempts`, `consumed_at`)
-- [ ] `TelegramLoginToken` model (`token`, `session_id`, `telegram_id`, `status` pending|confirmed|expired|used, `expires_at`)
-- [ ] Migration applied + `prisma generate`
-- [ ] Config/env additions (validated at boot): Google client id/secret + callback, GitHub client id/secret + callback, Telegram bot token/username, session cookie name/domain/secure flags, frontend redirect URL
-- [ ] Session change: access-token TTL → **3h**; set refresh token as `httpOnly` cookie (via `@fastify/cookie`); `/auth/refresh` and `/auth/logout` read the cookie
-- [ ] Reusable `state`/CSRF helper + `find-or-create identity` service helper shared by all providers
+- [x] Migrate `User`: make `email` nullable (keep unique), make `password_hash` nullable, add `email_verified Boolean @default(false)`
+- [x] Reconcile existing `register` / `login` / `getMe` with now-nullable `email` / `password_hash` (no runtime breakage) — login now guides no-password accounts to OAuth (§6); comments/invites null-guarded; `userShape` response exposes nullable `email` + `email_verified`
+- [x] `AuthProvider` enum (`email | google | github | telegram`) + `AuthIdentity` model (`user_id`, `provider`, `provider_user_id`, `provider_email`, `created_at`, `UNIQUE(provider, provider_user_id)`)
+- [x] `EmailOtp` model (`email`, `code_hash`, `purpose` signup|login, `expires_at`, `attempts`, `consumed_at`)
+- [x] `TelegramLoginToken` model (`token`, `session_id`, `telegram_id`, `status` pending|confirmed|expired|used, `expires_at`)
+- [ ] Migration applied + `prisma generate` — ⚠️ **partial:** `prisma generate` done + schema validates; migration SQL hand-written at `src/prisma/migrations/20260701130000_auth_multi_provider/`, **not yet applied** (DB unreachable — run `npx prisma migrate deploy` when it's back)
+- [x] Config/env additions (validated at boot): Google client id/secret + callback, GitHub client id/secret + callback, Telegram bot token/username, session cookie name/domain/secure flags, frontend redirect URL
+- [ ] Session change: access-token TTL → **3h** (done); set refresh token as `httpOnly` cookie (via `@fastify/cookie`); `/auth/refresh` and `/auth/logout` read the cookie — ⚠️ **partial:** TTLs now 3h/30d; **cookie plumbing deferred** (`@fastify/cookie` not installable offline, and untestable without the DB)
+- [x] Reusable `state`/CSRF helper (`src/lib/oauth-state.ts`) + `find-or-create identity` service helper (`src/modules/auth/identity.service.ts`) shared by all providers
 
 ## Phase A1 — Email + password (OTP verification)
 
