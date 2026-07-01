@@ -21,8 +21,10 @@ export const LoginBodySchema = z.object({
   password: z.string().min(1),
 });
 
+// `refresh_token` is optional: browsers send it via the httpOnly cookie, so the
+// body may be empty. The controller enforces "cookie or body must be present".
 export const RefreshBodySchema = z.object({
-  refresh_token: z.string().min(1),
+  refresh_token: z.string().min(1).optional(),
 });
 
 export const UpdateMeBodySchema = z.object({
@@ -100,9 +102,10 @@ export const loginRouteSchema: FastifySchema = {
 export const refreshRouteSchema: FastifySchema = {
   tags: ['Auth'],
   summary: 'Rotate the refresh token and issue a new access token',
+  description:
+    'Reads the refresh token from the httpOnly cookie (browsers) or the request body (API/mobile clients). Sets a rotated refresh cookie on success.',
   body: {
     type: 'object',
-    required: ['refresh_token'],
     properties: {
       refresh_token: { type: 'string' },
     },
@@ -115,9 +118,10 @@ export const refreshRouteSchema: FastifySchema = {
 export const logoutRouteSchema: FastifySchema = {
   tags: ['Auth'],
   summary: 'Revoke the current refresh token',
+  description:
+    'Revokes the refresh token from the httpOnly cookie (browsers) or the request body, and clears the refresh cookie.',
   body: {
     type: 'object',
-    required: ['refresh_token'],
     properties: {
       refresh_token: { type: 'string' },
     },

@@ -9,10 +9,10 @@
 
 ## Current Status
 
-- **Current Phase:** Phase A0 — Data model & session foundations (**7/9 done — 2 blocked by env**)
-- **Last Session:** 2026-07-01 (A0: schema + config + reconcile + helpers landed; verified via `prisma generate` + `tsc` + config unit test)
-- **Next Task:** Finish Phase A0 → (a) apply the `20260701130000_auth_multi_provider` migration once the DB is reachable, (b) wire the refresh `httpOnly` cookie (needs `@fastify/cookie` installed). Both blocked in the current offline/no-DB environment.
-- **Env blockers this run:** remote Postgres unreachable (P1001) → couldn't run `prisma migrate dev` or the integration test suite; npm registry unreachable (ETIMEDOUT) → couldn't `npm install @fastify/cookie` (also `@aws-sdk/*` is missing locally, so a full `npm run build` has 2 pre-existing errors in `src/lib/storage.ts` unrelated to auth).
+- **Current Phase:** Phase A1 — Email + password (OTP verification) (**0/6 done**)
+- **Last Session:** 2026-07-01 (**A0 complete**: refresh httpOnly-cookie plumbing landed via `@fastify/cookie` + `src/lib/session-cookie.ts` / `src/lib/duration.ts`; all 9 migrations applied to the remote DB; `prisma generate` re-run. Verified: `npm run build` green, ESLint + Prettier clean, auth integration tests 10/10, multi-tenant 8/8.)
+- **Next Task:** Phase A1 → Email sender abstraction (`lib/mailer`) — dev logs to console, prod SMTP/provider behind env.
+- **Env notes:** DB reachable only with `?sslmode=require&connect_timeout=30` appended to `DATABASE_URL` (Render free tier: high latency + idle spin-down). Heavier integration suites need a raised vitest `hookTimeout` here (default 10s is too short for the remote-DB seed hooks — e.g. `--hookTimeout 120000`); the auth suite passes at the default.
 
 ---
 
@@ -46,9 +46,9 @@ Locked from `auth_tz.md` §9 and §1. Do not re-litigate during the build.
 - [x] `AuthProvider` enum (`email | google | github | telegram`) + `AuthIdentity` model (`user_id`, `provider`, `provider_user_id`, `provider_email`, `created_at`, `UNIQUE(provider, provider_user_id)`)
 - [x] `EmailOtp` model (`email`, `code_hash`, `purpose` signup|login, `expires_at`, `attempts`, `consumed_at`)
 - [x] `TelegramLoginToken` model (`token`, `session_id`, `telegram_id`, `status` pending|confirmed|expired|used, `expires_at`)
-- [ ] Migration applied + `prisma generate` — ⚠️ **partial:** `prisma generate` done + schema validates; migration SQL hand-written at `src/prisma/migrations/20260701130000_auth_multi_provider/`, **not yet applied** (DB unreachable — run `npx prisma migrate deploy` when it's back)
+- [x] Migration applied + `prisma generate` — all **9** migrations applied via `npx prisma migrate deploy` to the (empty) remote DB; `prisma generate` re-run; `migrate status` → "Database schema is up to date!". Verified with auth integration tests (10/10). Note: reaching this DB needs `?sslmode=require&connect_timeout=30` appended to `DATABASE_URL` (Render free tier); not persisted to `.env` per user's choice.
 - [x] Config/env additions (validated at boot): Google client id/secret + callback, GitHub client id/secret + callback, Telegram bot token/username, session cookie name/domain/secure flags, frontend redirect URL
-- [ ] Session change: access-token TTL → **3h** (done); set refresh token as `httpOnly` cookie (via `@fastify/cookie`); `/auth/refresh` and `/auth/logout` read the cookie — ⚠️ **partial:** TTLs now 3h/30d; **cookie plumbing deferred** (`@fastify/cookie` not installable offline, and untestable without the DB)
+- [x] Session change: access-token TTL → **3h**; refresh token set as `httpOnly` cookie (via `@fastify/cookie`, registered in `app.ts`); `/auth/refresh` + `/auth/logout` read it cookie-first with a body fallback for API/mobile clients, and logout clears it. Shared helpers `src/lib/session-cookie.ts` (set/clear/read) + `src/lib/duration.ts` (cookie `maxAge` from `JWT_REFRESH_TTL`); `refresh_token` now optional in the request schema
 - [x] Reusable `state`/CSRF helper (`src/lib/oauth-state.ts`) + `find-or-create identity` service helper (`src/modules/auth/identity.service.ts`) shared by all providers
 
 ## Phase A1 — Email + password (OTP verification)

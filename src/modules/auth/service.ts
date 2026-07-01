@@ -3,6 +3,7 @@ import type { PrismaClient, User } from '@prisma/client';
 import { config } from '../../config/index.js';
 import { AppError } from '../../lib/errors.js';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../../lib/jwt.js';
+import { parseDurationMs } from '../../lib/duration.js';
 import { acceptInviteAfterRegister } from '../invites/service.js';
 import type { RegisterBody, LoginBody, UpdateMeBody } from './schema.js';
 
@@ -19,25 +20,9 @@ function stripHash(user: User): SafeUser {
   return safe;
 }
 
-/**
- * Parse a JWT-style TTL string ("15m", "7d", "3600") into a future Date.
- * Only handles the units used in the env schema: s/m/h/d/w/y and bare seconds.
- */
+/** Turn a JWT-style TTL string ("15m", "7d", "3600") into a future Date. */
 function ttlToDate(ttl: string): Date {
-  const match = /^(\d+)(ms|s|m|h|d|w|y)?$/.exec(ttl);
-  if (!match || !match[1]) throw new Error(`Cannot parse TTL: ${ttl}`);
-  const n = parseInt(match[1], 10);
-  const unit = match[2] ?? 's';
-  const msMap: Record<string, number> = {
-    ms: 1,
-    s: 1_000,
-    m: 60_000,
-    h: 3_600_000,
-    d: 86_400_000,
-    w: 604_800_000,
-    y: 31_536_000_000,
-  };
-  return new Date(Date.now() + n * (msMap[unit] ?? 1_000));
+  return new Date(Date.now() + parseDurationMs(ttl));
 }
 
 // ─── Public service functions ─────────────────────────────────────────────────

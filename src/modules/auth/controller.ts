@@ -1,5 +1,11 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import * as authService from './service.js';
+import { AppError } from '../../lib/errors.js';
+import {
+  setRefreshCookie,
+  clearRefreshCookie,
+  readRefreshCookie,
+} from '../../lib/session-cookie.js';
 import {
   RegisterBodySchema,
   LoginBodySchema,
@@ -10,24 +16,35 @@ import {
 export async function registerHandler(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   const body = RegisterBodySchema.parse(request.body);
   const result = await authService.register(request.server.prisma, body);
+  setRefreshCookie(reply, result.refresh_token);
   reply.code(201).send(result);
 }
 
 export async function loginHandler(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   const body = LoginBodySchema.parse(request.body);
   const result = await authService.login(request.server.prisma, body);
+  setRefreshCookie(reply, result.refresh_token);
   reply.send(result);
 }
 
 export async function refreshHandler(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-  const { refresh_token } = RefreshBodySchema.parse(request.body);
-  const result = await authService.refresh(request.server.prisma, refresh_token);
+  // Prefer the httpOnly cookie (browsers); fall back to the body for API/mobile
+  // clients that can't use cookies. The token is also returned in the body so
+  // those clients can rotate it.
+  const { refresh_token: bodyToken } = RefreshBodySchema.parse(request.body ?? {});
+  const token = readRefreshCookie(request.cookies) ?? bodyToken;
+  if (!token) throw AppError.unauthorized('No refresh token provided');
+
+  const result = await authService.refresh(request.server.prisma, token);
+  setRefreshCookie(reply, result.refresh_token);
   reply.send(result);
 }
 
 export async function logoutHandler(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-  const { refresh_token } = RefreshBodySchema.parse(request.body);
-  await authService.logout(request.server.prisma, refresh_token);
+  const { refresh_token: bodyToken } = RefreshBodySchema.parse(request.body ?? {});
+  const token = readRefreshCookie(request.cookies) ?? bodyToken;
+  if (token) await authService.logout(request.server.prisma, token);
+  clearRefreshCookie(reply);
   reply.code(204).send();
 }
 
