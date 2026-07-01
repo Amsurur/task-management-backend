@@ -61,6 +61,7 @@ export async function updateIssueHandler(
     request.workspace.id,
     projectId,
     issueId,
+    request.userId,
     body,
   );
   reply.send(issue);
@@ -71,7 +72,13 @@ export async function deleteIssueHandler(
   reply: FastifyReply,
 ): Promise<void> {
   const { projectId, issueId } = request.params as { projectId: string; issueId: string };
-  await issueService.deleteIssue(request.server.prisma, request.workspace.id, projectId, issueId);
+  await issueService.deleteIssue(
+    request.server.prisma,
+    request.workspace.id,
+    projectId,
+    issueId,
+    request.userId,
+  );
   reply.code(204).send();
 }
 
@@ -86,6 +93,7 @@ export async function addAssigneeHandler(
     request.workspace.id,
     projectId,
     issueId,
+    request.userId,
     user_id,
   );
   reply.code(201).send(issue);
@@ -105,6 +113,7 @@ export async function removeAssigneeHandler(
     request.workspace.id,
     projectId,
     issueId,
+    request.userId,
     userId,
   );
   reply.send(issue);
@@ -118,6 +127,7 @@ export async function addLabelHandler(request: FastifyRequest, reply: FastifyRep
     request.workspace.id,
     projectId,
     issueId,
+    request.userId,
     label_id,
   );
   reply.code(201).send(issue);
@@ -137,6 +147,7 @@ export async function removeLabelHandler(
     request.workspace.id,
     projectId,
     issueId,
+    request.userId,
     labelId,
   );
   reply.send(issue);

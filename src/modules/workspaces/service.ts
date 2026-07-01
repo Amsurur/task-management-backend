@@ -1,10 +1,13 @@
-import type { PrismaClient, Workspace, WorkspaceMember } from '@prisma/client';
+import type { PrismaClient, Workspace, WorkspaceMember, WorkspaceInvite } from '@prisma/client';
 import { AppError } from '../../lib/errors.js';
+import { sendInviteEmail } from '../../lib/email.js';
+import { config } from '../../config/index.js';
 import type {
   CreateWorkspaceBody,
   UpdateWorkspaceBody,
   AddMemberBody,
   ChangeMemberRoleBody,
+  InviteMemberBody,
 } from './schema.js';
 
 export async function listWorkspaces(prisma: PrismaClient, userId: string): Promise<Workspace[]> {
@@ -139,4 +142,64 @@ export async function removeMember(
   await prisma.workspaceMember.delete({
     where: { workspace_id_user_id: { workspace_id: workspaceId, user_id: targetUserId } },
   });
+}
+
+// ─── Invites ──────────────────────────────────────────────────────────────────
+
+const INVITE_TTL_DAYS = 7;
+
+export async function inviteMember(
+  prisma: PrismaClient,
+  workspaceId: string,
+  inviterId: string,
+  body: InviteMemberBody,
+): Promise<WorkspaceInvite> {
+  const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } });
+  if (!workspace) throw AppError.notFound('Workspace not found');
+
+  const inviter = await prisma.user.findUnique({ where: { id: inviterId } });
+  if (!inviter) throw AppError.notFound('Inviter not found');
+
+  // If user already exists and is already a member, short-circuit.
+  const existingUser = await prisma.user.findUnique({ where: { email: body.email } });
+  if (existingUser) {
+    const existingMember = await prisma.workspaceMember.findUnique({
+      where: { workspace_id_user_id: { workspace_id: workspaceId, user_id: existingUser.id } },
+    });
+    if (existingMember) {
+      throw AppError.conflict('This user is already a member of the workspace');
+    }
+  }
+
+  // Invalidate any pending (unaccepted, non-expired) invite for the same email+workspace.
+  await prisma.workspaceInvite.deleteMany({
+    where: {
+      workspace_id: workspaceId,
+      email: body.email,
+      accepted_at: null,
+      expires_at: { gt: new Date() },
+    },
+  });
+
+  const expiresAt = new Date(Date.now() + INVITE_TTL_DAYS * 24 * 60 * 60 * 1000);
+  const invite = await prisma.workspaceInvite.create({
+    data: {
+      workspace_id: workspaceId,
+      invited_by_id: inviterId,
+      email: body.email,
+      role: body.role,
+      expires_at: expiresAt,
+    },
+  });
+
+  const inviteUrl = `${config.PUBLIC_BASE_URL}/invites/${invite.token}`;
+  await sendInviteEmail({
+    to: body.email,
+    workspaceName: workspace.name,
+    inviterName: inviter.display_name,
+    inviteUrl,
+    expiresAt,
+  });
+
+  return invite;
 }

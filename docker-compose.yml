@@ -24,6 +24,38 @@ services:
       timeout: 5s
       retries: 10
 
+  # S3-compatible object store for attachments. Only used when STORAGE_DRIVER=s3;
+  # the app defaults to the local-disk driver, so MinIO is optional.
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-minioadmin}
+    ports:
+      - '${MINIO_PORT:-9000}:9000'
+      - '${MINIO_CONSOLE_PORT:-9001}:9001'
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: create the attachments bucket on startup.
+  minio-setup:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${S3_ACCESS_KEY_ID:-minioadmin} ${S3_SECRET_ACCESS_KEY:-minioadmin} &&
+      mc mb --ignore-existing local/${S3_BUCKET:-attachments};
+      "
+
   app:
     build: .
     restart: unless-stopped
@@ -41,8 +73,25 @@ services:
       JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-15m}
       JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-7d}
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      # Attachment storage. Defaults to local disk; set STORAGE_DRIVER=s3 to use MinIO.
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+      STORAGE_PRESIGN_TTL: ${STORAGE_PRESIGN_TTL:-900}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3000}
+      ATTACHMENT_MAX_BYTES: ${ATTACHMENT_MAX_BYTES:-26214400}
+      LOCAL_STORAGE_DIR: ${LOCAL_STORAGE_DIR:-/data/uploads}
+      # Inside the compose network MinIO is reachable at `minio`, not localhost.
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-attachments}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-minioadmin}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-minioadmin}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+    volumes:
+      - uploads:/data/uploads
     ports:
       - '${PORT:-3000}:3000'
 
 volumes:
   pgdata:
+  miniodata:
+  uploads:

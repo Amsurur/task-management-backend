@@ -11,6 +11,7 @@ import {
   addMemberSchema,
   changeMemberRoleSchema,
   removeMemberSchema,
+  inviteMemberSchema,
 } from './schema.js';
 import {
   listWorkspacesHandler,
@@ -22,6 +23,7 @@ import {
   addMemberHandler,
   changeMemberRoleHandler,
   removeMemberHandler,
+  inviteMemberHandler,
 } from './controller.js';
 
 export async function workspaceRoutes(app: FastifyInstance): Promise<void> {
@@ -91,5 +93,13 @@ export async function workspaceRoutes(app: FastifyInstance): Promise<void> {
       preHandler: [authenticate, requireWorkspaceMember('admin')],
     },
     removeMemberHandler,
+  );
+  app.post(
+    '/:workspaceSlug/members/invite',
+    {
+      schema: inviteMemberSchema,
+      preHandler: [authenticate, requireWorkspaceMember('admin')],
+    },
+    inviteMemberHandler,
   );
 }

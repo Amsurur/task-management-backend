@@ -5,6 +5,7 @@ import {
   UpdateWorkspaceBodySchema,
   AddMemberBodySchema,
   ChangeMemberRoleBodySchema,
+  InviteMemberBodySchema,
 } from './schema.js';
 
 export async function listWorkspacesHandler(
@@ -106,4 +107,18 @@ export async function removeMemberHandler(
     request.userId,
   );
   reply.code(204).send();
+}
+
+export async function inviteMemberHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const body = InviteMemberBodySchema.parse(request.body);
+  const invite = await workspaceService.inviteMember(
+    request.server.prisma,
+    request.workspace.id,
+    request.userId,
+    body,
+  );
+  reply.code(201).send(invite);
 }

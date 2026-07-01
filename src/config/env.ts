@@ -13,34 +13,80 @@ const duration = z
   .string()
   .regex(/^\d+(ms|s|m|h|d|w|y)?$/, 'must be a duration like "15m", "7d", or a number of seconds');
 
-export const envSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+export const envSchema = z
+  .object({
+    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 
-  // --- HTTP server ---
-  HOST: z.string().min(1).default('0.0.0.0'),
-  PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+    // --- HTTP server ---
+    HOST: z.string().min(1).default('0.0.0.0'),
+    PORT: z.coerce.number().int().min(1).max(65535).default(3000),
 
-  // --- Logging ---
-  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).optional(),
+    // --- Logging ---
+    LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).optional(),
 
-  // --- Database ---
-  DATABASE_URL: z
-    .string()
-    .min(1, 'DATABASE_URL is required')
-    .refine(
-      (v) => v.startsWith('postgres://') || v.startsWith('postgresql://'),
-      'DATABASE_URL must be a PostgreSQL connection string',
-    ),
+    // --- Database ---
+    DATABASE_URL: z
+      .string()
+      .min(1, 'DATABASE_URL is required')
+      .refine(
+        (v) => v.startsWith('postgres://') || v.startsWith('postgresql://'),
+        'DATABASE_URL must be a PostgreSQL connection string',
+      ),
 
-  // --- Auth / JWT --- (secrets required; no defaults, never committed)
-  JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET must be at least 32 characters'),
-  JWT_REFRESH_SECRET: z.string().min(32, 'JWT_REFRESH_SECRET must be at least 32 characters'),
-  JWT_ACCESS_TTL: duration.default('15m'),
-  JWT_REFRESH_TTL: duration.default('7d'),
+    // --- Auth / JWT --- (secrets required; no defaults, never committed)
+    JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET must be at least 32 characters'),
+    JWT_REFRESH_SECRET: z.string().min(32, 'JWT_REFRESH_SECRET must be at least 32 characters'),
+    JWT_ACCESS_TTL: duration.default('15m'),
+    JWT_REFRESH_TTL: duration.default('7d'),
 
-  // --- CORS --- (comma-separated origins, or `*`; configured per environment)
-  CORS_ORIGIN: z.string().min(1).default('*'),
-});
+    // --- CORS --- (comma-separated origins, or `*`; configured per environment)
+    CORS_ORIGIN: z.string().min(1).default('*'),
+
+    // --- Attachment storage ---
+    // `local` (default) stores bytes on disk and serves them through internal API
+    // routes; `s3` uses an S3-compatible object store (AWS S3 / MinIO) with
+    // presigned URLs. The S3_* vars are required only when STORAGE_DRIVER=s3
+    // (enforced by the superRefine below).
+    STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
+    /** Lifetime (seconds) of generated presigned upload/download URLs. */
+    STORAGE_PRESIGN_TTL: z.coerce.number().int().min(30).max(86400).default(900),
+    /** Public base URL the app is reachable at — used to build local storage URLs. */
+    PUBLIC_BASE_URL: z.string().url().default('http://localhost:3000'),
+    /** Max accepted upload size in bytes (default 25 MiB). */
+    ATTACHMENT_MAX_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .default(25 * 1024 * 1024),
+
+    // local driver
+    LOCAL_STORAGE_DIR: z.string().min(1).default('./uploads'),
+
+    // s3 driver (optional unless STORAGE_DRIVER=s3)
+    S3_ENDPOINT: z.string().url().optional(),
+    S3_REGION: z.string().min(1).default('us-east-1'),
+    S3_BUCKET: z.string().min(1).optional(),
+    S3_ACCESS_KEY_ID: z.string().min(1).optional(),
+    S3_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+    /** MinIO and most non-AWS stores need path-style addressing. */
+    S3_FORCE_PATH_STYLE: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((v) => v === 'true'),
+  })
+  .superRefine((env, ctx) => {
+    if (env.STORAGE_DRIVER === 's3') {
+      for (const key of ['S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'] as const) {
+        if (!env[key]) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: `${key} is required when STORAGE_DRIVER=s3`,
+          });
+        }
+      }
+    }
+  });
 
 export type Env = z.infer<typeof envSchema>;
 

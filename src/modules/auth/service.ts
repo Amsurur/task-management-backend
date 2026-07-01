@@ -3,6 +3,7 @@ import type { PrismaClient, User } from '@prisma/client';
 import { config } from '../../config/index.js';
 import { AppError } from '../../lib/errors.js';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../../lib/jwt.js';
+import { acceptInviteAfterRegister } from '../invites/service.js';
 import type { RegisterBody, LoginBody, UpdateMeBody } from './schema.js';
 
 export interface AuthTokens {
@@ -45,10 +46,29 @@ export async function register(prisma: PrismaClient, body: RegisterBody): Promis
   const existing = await prisma.user.findUnique({ where: { email: body.email } });
   if (existing) throw AppError.conflict('An account with this email already exists');
 
+  // If an invite_token is provided, validate it before creating the account.
+  // We only check it exists + isn't expired/used here — the email on the invite must
+  // match the registration email so we enforce that in acceptInviteAfterRegister.
+  if (body.invite_token) {
+    const invite = await prisma.workspaceInvite.findUnique({
+      where: { token: body.invite_token },
+    });
+    if (!invite) throw AppError.notFound('Invite not found');
+    if (invite.accepted_at) throw AppError.conflict('Invite has already been accepted');
+    if (invite.expires_at < new Date()) throw AppError.gone('Invite has expired');
+    if (invite.email.toLowerCase() !== body.email.toLowerCase()) {
+      throw AppError.forbidden('This invite was sent to a different email address');
+    }
+  }
+
   const password_hash = await argon2.hash(body.password);
   const user = await prisma.user.create({
     data: { email: body.email, password_hash, display_name: body.display_name },
   });
+
+  if (body.invite_token) {
+    await acceptInviteAfterRegister(prisma, body.invite_token, user.id);
+  }
 
   return issueTokenPair(prisma, user);
 }

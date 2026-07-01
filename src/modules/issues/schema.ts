@@ -2,6 +2,9 @@ import { z } from 'zod';
 import type { FastifySchema } from 'fastify';
 
 const PRIORITIES = ['none', 'low', 'medium', 'high', 'urgent'] as const;
+const SORT_FIELDS = ['created_at', 'updated_at', 'priority', 'due_date', 'sort_order'] as const;
+const SORT_ORDERS = ['asc', 'desc'] as const;
+const GROUP_FIELDS = ['state', 'priority', 'assignee'] as const;
 
 export const CreateIssueBodySchema = z.object({
   title: z.string().min(1).max(500),
@@ -33,8 +36,18 @@ export const IssueFilterQuerySchema = z.object({
   priority: z.union([z.string(), z.array(z.string())]).optional(),
   assignee: z.union([z.string(), z.array(z.string())]).optional(),
   label: z.union([z.string(), z.array(z.string())]).optional(),
-  search: z.string().optional(),
+  cycle: z.string().uuid().optional(),
+  module: z.string().uuid().optional(),
+  created_by: z.string().uuid().optional(),
   parent_id: z.string().uuid().optional(),
+  search: z.string().optional(),
+  due_before: z.string().datetime().optional(),
+  due_after: z.string().datetime().optional(),
+  created_before: z.string().datetime().optional(),
+  created_after: z.string().datetime().optional(),
+  sort_by: z.enum(SORT_FIELDS).default('created_at'),
+  order: z.enum(SORT_ORDERS).default('asc'),
+  group_by: z.enum(GROUP_FIELDS).optional(),
   cursor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
@@ -93,18 +106,42 @@ export const listIssuesSchema: FastifySchema = {
       priority: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
       assignee: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
       label: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
-      search: { type: 'string' },
+      cycle: { type: 'string', format: 'uuid' },
+      module: { type: 'string', format: 'uuid' },
+      created_by: { type: 'string', format: 'uuid' },
       parent_id: { type: 'string' },
+      search: { type: 'string' },
+      due_before: { type: 'string' },
+      due_after: { type: 'string' },
+      created_before: { type: 'string' },
+      created_after: { type: 'string' },
+      sort_by: { type: 'string', enum: SORT_FIELDS },
+      order: { type: 'string', enum: SORT_ORDERS },
+      group_by: { type: 'string', enum: GROUP_FIELDS },
       cursor: { type: 'string' },
       limit: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
     },
   },
   response: {
+    // Two shapes: paginated (`data`/`next_cursor`) by default, or grouped
+    // (`group_by`/`groups`) when `group_by` is supplied. Only the properties
+    // present on the returned object are serialized.
     200: {
       type: 'object',
       properties: {
         data: { type: 'array', items: issueShape },
         next_cursor: { type: 'string', nullable: true },
+        group_by: { type: 'string', enum: GROUP_FIELDS },
+        groups: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              key: { type: 'string', nullable: true },
+              issues: { type: 'array', items: issueShape },
+            },
+          },
+        },
       },
     },
   },

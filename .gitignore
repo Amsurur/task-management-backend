@@ -23,3 +23,6 @@ coverage/
 
 # OS
 .DS_Store
+
+# Local attachment storage (LOCAL_STORAGE_DIR)
+/uploads/

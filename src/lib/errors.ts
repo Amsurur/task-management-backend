@@ -14,6 +14,7 @@ export type ErrorCode =
   | 'FORBIDDEN'
   | 'NOT_FOUND'
   | 'CONFLICT'
+  | 'GONE'
   | 'RATE_LIMITED'
   | 'INTERNAL_ERROR';
 
@@ -57,6 +58,10 @@ export class AppError extends Error {
 
   static conflict(message = 'Resource conflict', details?: unknown): AppError {
     return new AppError(409, 'CONFLICT', message, details);
+  }
+
+  static gone(message = 'Resource is no longer available', details?: unknown): AppError {
+    return new AppError(410, 'GONE', message, details);
   }
 }
 

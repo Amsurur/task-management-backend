@@ -31,10 +31,16 @@ export const ChangeMemberRoleBodySchema = z.object({
   role: z.enum(['admin', 'member', 'guest']),
 });
 
+export const InviteMemberBodySchema = z.object({
+  email: z.string().email(),
+  role: z.enum(['admin', 'member', 'guest']).default('member'),
+});
+
 export type CreateWorkspaceBody = z.infer<typeof CreateWorkspaceBodySchema>;
 export type UpdateWorkspaceBody = z.infer<typeof UpdateWorkspaceBodySchema>;
 export type AddMemberBody = z.infer<typeof AddMemberBodySchema>;
 export type ChangeMemberRoleBody = z.infer<typeof ChangeMemberRoleBodySchema>;
+export type InviteMemberBody = z.infer<typeof InviteMemberBodySchema>;
 
 // ─── Fastify route schemas ────────────────────────────────────────────────────
 
@@ -174,4 +180,35 @@ export const removeMemberSchema: FastifySchema = {
     properties: { workspaceSlug: { type: 'string' }, userId: { type: 'string' } },
   },
   response: { 204: { type: 'null' } },
+};
+
+const inviteShape = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    workspace_id: { type: 'string' },
+    invited_by_id: { type: 'string' },
+    email: { type: 'string' },
+    role: { type: 'string', enum: ['admin', 'member', 'guest'] },
+    token: { type: 'string' },
+    expires_at: { type: 'string', format: 'date-time' },
+    accepted_at: { type: 'string', format: 'date-time', nullable: true },
+    created_at: { type: 'string', format: 'date-time' },
+  },
+} as const;
+
+export const inviteMemberSchema: FastifySchema = {
+  tags: ['Workspaces'],
+  summary: 'Invite a user to the workspace by email (admin+)',
+  security,
+  params: { type: 'object', properties: { workspaceSlug: { type: 'string' } } },
+  body: {
+    type: 'object',
+    required: ['email'],
+    properties: {
+      email: { type: 'string', format: 'email' },
+      role: { type: 'string', enum: ['admin', 'member', 'guest'] },
+    },
+  },
+  response: { 201: inviteShape },
 };

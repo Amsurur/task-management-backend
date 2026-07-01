@@ -1,0 +1,97 @@
+import { z } from 'zod';
+import type { FastifySchema } from 'fastify';
+
+// ─── Zod (service-facing) ─────────────────────────────────────────────────────
+
+export const CreateAttachmentBodySchema = z.object({
+  file_name: z.string().min(1).max(255),
+  file_size: z.number().int().positive(),
+  mime_type: z.string().min(1).max(255),
+});
+
+export type CreateAttachmentBody = z.infer<typeof CreateAttachmentBodySchema>;
+
+// ─── Fastify route schemas ────────────────────────────────────────────────────
+
+const security = [{ bearerAuth: [] }];
+
+const uploaderShape = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    display_name: { type: 'string' },
+    avatar_url: { type: 'string', nullable: true },
+  },
+} as const;
+
+const attachmentShape = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    workspace_id: { type: 'string' },
+    issue_id: { type: 'string' },
+    uploaded_by_id: { type: 'string' },
+    file_name: { type: 'string' },
+    file_size: { type: 'integer' },
+    mime_type: { type: 'string' },
+    storage_key: { type: 'string' },
+    created_at: { type: 'string', format: 'date-time' },
+    uploaded_by: uploaderShape,
+    download_url: { type: 'string' },
+  },
+} as const;
+
+const uploadShape = {
+  type: 'object',
+  properties: {
+    url: { type: 'string' },
+    method: { type: 'string' },
+    headers: { type: 'object', additionalProperties: { type: 'string' } },
+    expires_in: { type: 'integer' },
+  },
+} as const;
+
+export const listAttachmentsSchema: FastifySchema = {
+  tags: ['Attachments'],
+  summary: 'List attachments on an issue (each with a presigned download URL)',
+  security,
+  response: {
+    200: { type: 'array', items: attachmentShape },
+  },
+};
+
+export const createAttachmentSchema: FastifySchema = {
+  tags: ['Attachments'],
+  summary: 'Register an attachment and get a presigned upload URL',
+  description:
+    'Creates the attachment metadata row and returns a short-lived presigned URL the client ' +
+    'uploads the file bytes to (HTTP PUT). Bytes never flow through the API.',
+  security,
+  body: {
+    type: 'object',
+    required: ['file_name', 'file_size', 'mime_type'],
+    properties: {
+      file_name: { type: 'string', minLength: 1, maxLength: 255 },
+      file_size: { type: 'integer', minimum: 1 },
+      mime_type: { type: 'string', minLength: 1, maxLength: 255 },
+    },
+  },
+  response: {
+    201: {
+      type: 'object',
+      properties: {
+        attachment: attachmentShape,
+        upload: uploadShape,
+      },
+    },
+  },
+};
+
+export const deleteAttachmentSchema: FastifySchema = {
+  tags: ['Attachments'],
+  summary: 'Delete an attachment (uploader or workspace admin/owner)',
+  security,
+  response: {
+    204: { type: 'null' },
+  },
+};
