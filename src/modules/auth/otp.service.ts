@@ -6,9 +6,9 @@
 // lives in service.ts — this module is pure persistence + policy.
 
 import crypto from 'node:crypto';
-import * as argon2 from 'argon2';
 import type { PrismaClient, EmailOtpPurpose } from '@prisma/client';
 import { AppError } from '../../lib/errors.js';
+import { hashSecret, verifySecret } from '../../lib/password.js';
 
 // Locked defaults (AUTH-ROADMAP Resolved Decisions / auth_tz.md §9).
 const CODE_LENGTH = 6;
@@ -66,7 +66,7 @@ export async function issueOtp(
   });
 
   const code = generateCode();
-  const code_hash = await argon2.hash(code);
+  const code_hash = await hashSecret(code);
   await prisma.emailOtp.create({
     data: { email, code_hash, purpose, expires_at: new Date(Date.now() + TTL_MS) },
   });
@@ -102,7 +102,7 @@ export async function verifyOtp(
     throw AppError.badRequest('Too many incorrect attempts. Request a new code.');
   }
 
-  const matches = await argon2.verify(otp.code_hash, code).catch(() => false);
+  const matches = await verifySecret(otp.code_hash, code);
   if (!matches) {
     const attempts = otp.attempts + 1;
     await prisma.emailOtp.update({

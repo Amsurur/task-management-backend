@@ -1,11 +1,12 @@
 import { z } from 'zod';
 import type { FastifySchema } from 'fastify';
+import { PASSWORD_MIN_LENGTH, passwordSchema } from '../../lib/password.js';
 
 // ─── Zod validators ──────────────────────────────────────────────────────────
 
 export const RegisterBodySchema = z.object({
   email: z.string().email(),
-  password: z.string().min(8, 'Password must be at least 8 characters'),
+  password: passwordSchema,
   display_name: z.string().min(1).max(100),
   // Clients (e.g. HTML forms) often send an empty string when the user leaves
   // the invite field blank. Treat "" / whitespace as "no invite" so a normal
@@ -35,7 +36,7 @@ export const UpdateMeBodySchema = z.object({
 // Email+password signup — same fields as register, but no invite_token (OTP flow).
 export const EmailSignupBodySchema = z.object({
   email: z.string().email(),
-  password: z.string().min(8, 'Password must be at least 8 characters'),
+  password: passwordSchema,
   display_name: z.string().min(1).max(100),
 });
 
@@ -154,15 +155,45 @@ const tokenPair = {
   },
 } as const;
 
+// Standard error envelope (TZ §8). Attached as the `default` response on every auth
+// route via `responses()` below, so every endpoint documents its failure shape.
+// `additionalProperties: true` on `error` lets the optional `details` field
+// serialize through untouched (it is unstructured — validation issues, requestId, …).
+const errorResponse = {
+  type: 'object',
+  description: 'Error envelope: `{ error: { code, message, details? } }`',
+  properties: {
+    error: {
+      type: 'object',
+      properties: {
+        code: { type: 'string' },
+        message: { type: 'string' },
+      },
+      required: ['code', 'message'],
+      additionalProperties: true,
+    },
+  },
+} as const;
+
+/**
+ * Merge a route's success responses with the shared `default` error envelope so
+ * OpenAPI documents both, and Fastify serializes any error status through it.
+ */
+function responses(map: Record<string, unknown>): Record<string, unknown> {
+  return { ...map, default: errorResponse };
+}
+
 export const registerRouteSchema: FastifySchema = {
   tags: ['Auth'],
   summary: 'Register a new user (optionally with an invite_token to auto-join a workspace)',
+  description:
+    'Creates an email+password account directly and issues a session (sets the refresh cookie). This is the classic register path; the OTP-verified flow is `/auth/email/signup` → `/auth/email/verify`.',
   body: {
     type: 'object',
     required: ['email', 'password', 'display_name'],
     properties: {
       email: { type: 'string', format: 'email' },
-      password: { type: 'string', minLength: 8 },
+      password: { type: 'string', minLength: PASSWORD_MIN_LENGTH },
       display_name: { type: 'string', minLength: 1, maxLength: 100 },
       // No `format: uuid` here so an empty string from a form isn't rejected at
       // the Fastify layer — the Zod schema normalizes "" to "no invite" and
@@ -170,14 +201,16 @@ export const registerRouteSchema: FastifySchema = {
       invite_token: { type: 'string' },
     },
   },
-  response: {
+  response: responses({
     201: tokenPair,
-  },
+  }),
 };
 
 export const loginRouteSchema: FastifySchema = {
   tags: ['Auth'],
   summary: 'Login with email and password',
+  description:
+    'Honest "invalid email or password" on miss (no account enumeration). Accounts with no password are guided to their OAuth provider; unverified accounts are guided to verify first. Sets the refresh cookie on success. Alias of `/auth/email/login`.',
   body: {
     type: 'object',
     required: ['email', 'password'],
@@ -186,9 +219,9 @@ export const loginRouteSchema: FastifySchema = {
       password: { type: 'string', minLength: 1 },
     },
   },
-  response: {
+  response: responses({
     200: tokenPair,
-  },
+  }),
 };
 
 const otpChallenge = {
@@ -209,13 +242,13 @@ export const emailSignupRouteSchema: FastifySchema = {
     required: ['email', 'password', 'display_name'],
     properties: {
       email: { type: 'string', format: 'email' },
-      password: { type: 'string', minLength: 8 },
+      password: { type: 'string', minLength: PASSWORD_MIN_LENGTH },
       display_name: { type: 'string', minLength: 1, maxLength: 100 },
     },
   },
-  response: {
+  response: responses({
     200: otpChallenge,
-  },
+  }),
 };
 
 export const emailVerifyRouteSchema: FastifySchema = {
@@ -229,9 +262,9 @@ export const emailVerifyRouteSchema: FastifySchema = {
       code: { type: 'string', pattern: '^\\d{6}$' },
     },
   },
-  response: {
+  response: responses({
     200: tokenPair,
-  },
+  }),
 };
 
 export const emailLoginRouteSchema: FastifySchema = {
@@ -247,9 +280,9 @@ export const emailLoginRouteSchema: FastifySchema = {
       password: { type: 'string', minLength: 1 },
     },
   },
-  response: {
+  response: responses({
     200: tokenPair,
-  },
+  }),
 };
 
 export const googleRedirectRouteSchema: FastifySchema = {
@@ -257,9 +290,9 @@ export const googleRedirectRouteSchema: FastifySchema = {
   summary: 'Begin Google OAuth — redirects to the Google consent screen',
   description:
     'Mints a CSRF `state`, stores it in a short-lived httpOnly cookie, and 302-redirects the browser to Google.',
-  response: {
+  response: responses({
     302: { type: 'null', description: 'Redirect to Google' },
-  },
+  }),
 };
 
 export const googleCallbackRouteSchema: FastifySchema = {
@@ -275,9 +308,9 @@ export const googleCallbackRouteSchema: FastifySchema = {
       error: { type: 'string' },
     },
   },
-  response: {
+  response: responses({
     302: { type: 'null', description: 'Redirect to the frontend (or an error page)' },
-  },
+  }),
 };
 
 export const githubRedirectRouteSchema: FastifySchema = {
@@ -285,9 +318,9 @@ export const githubRedirectRouteSchema: FastifySchema = {
   summary: 'Begin GitHub OAuth — redirects to the GitHub authorize screen',
   description:
     'Mints a CSRF `state`, stores it in a short-lived httpOnly cookie, and 302-redirects the browser to GitHub (scope `read:user user:email`).',
-  response: {
+  response: responses({
     302: { type: 'null', description: 'Redirect to GitHub' },
-  },
+  }),
 };
 
 export const githubCallbackRouteSchema: FastifySchema = {
@@ -303,9 +336,9 @@ export const githubCallbackRouteSchema: FastifySchema = {
       error: { type: 'string' },
     },
   },
-  response: {
+  response: responses({
     302: { type: 'null', description: 'Redirect to the frontend (or an error page)' },
-  },
+  }),
 };
 
 // ─── Telegram deep-link login (auth_tz.md §7) ─────────────────────────────────
@@ -315,7 +348,7 @@ export const telegramInitRouteSchema: FastifySchema = {
   summary: 'Start a Telegram login — returns a t.me deep-link and a polling token',
   description:
     'Creates a short-lived (10 min) `pending` login token bound to the browser via an httpOnly `tg_session` cookie, and returns the `https://t.me/<bot>?start=<token>` deep-link. The client opens the link, then polls `GET /auth/telegram/status?token=` until the user confirms in the bot.',
-  response: {
+  response: responses({
     200: {
       type: 'object',
       properties: {
@@ -324,7 +357,7 @@ export const telegramInitRouteSchema: FastifySchema = {
         expires_at: { type: 'string', format: 'date-time' },
       },
     },
-  },
+  }),
 };
 
 export const telegramWebhookRouteSchema: FastifySchema = {
@@ -333,9 +366,9 @@ export const telegramWebhookRouteSchema: FastifySchema = {
   description:
     'Endpoint Telegram posts bot updates to. A `/start <token>` message gets a confirm inline-button; tapping it confirms the login token and attaches the tapper’s telegram_id. Protected by the `X-Telegram-Bot-Api-Secret-Token` header when `TELEGRAM_WEBHOOK_SECRET` is configured. Not called by the frontend.',
   body: { type: 'object', additionalProperties: true },
-  response: {
+  response: responses({
     200: { type: 'object', properties: { ok: { type: 'boolean' } } },
-  },
+  }),
 };
 
 export const telegramStatusRouteSchema: FastifySchema = {
@@ -350,7 +383,7 @@ export const telegramStatusRouteSchema: FastifySchema = {
       token: { type: 'string' },
     },
   },
-  response: {
+  response: responses({
     200: {
       type: 'object',
       properties: {
@@ -360,7 +393,7 @@ export const telegramStatusRouteSchema: FastifySchema = {
         user: userShape,
       },
     },
-  },
+  }),
 };
 
 export const refreshRouteSchema: FastifySchema = {
@@ -374,9 +407,9 @@ export const refreshRouteSchema: FastifySchema = {
       refresh_token: { type: 'string' },
     },
   },
-  response: {
+  response: responses({
     200: tokenPair,
-  },
+  }),
 };
 
 export const logoutRouteSchema: FastifySchema = {
@@ -390,9 +423,9 @@ export const logoutRouteSchema: FastifySchema = {
       refresh_token: { type: 'string' },
     },
   },
-  response: {
+  response: responses({
     204: { type: 'null', description: 'Logged out' },
-  },
+  }),
 };
 
 // ─── Connected-accounts management (auth_tz.md §10) ────────────────────────────
@@ -410,10 +443,12 @@ const identityShape = {
 export const listIdentitiesRouteSchema: FastifySchema = {
   tags: ['Auth'],
   summary: 'List the current account’s linked login methods',
+  description:
+    'Returns the account’s linked identities (email / google / github / telegram), oldest first — the data behind a “Connected accounts” screen (auth_tz.md §10).',
   security: [{ bearerAuth: [] }],
-  response: {
+  response: responses({
     200: { type: 'array', items: identityShape },
-  },
+  }),
 };
 
 export const linkIdentityRouteSchema: FastifySchema = {
@@ -436,9 +471,9 @@ export const linkIdentityRouteSchema: FastifySchema = {
       token: { type: 'string' },
     },
   },
-  response: {
+  response: responses({
     200: identityShape,
-  },
+  }),
 };
 
 export const unlinkIdentityRouteSchema: FastifySchema = {
@@ -454,21 +489,25 @@ export const unlinkIdentityRouteSchema: FastifySchema = {
       provider: { type: 'string', enum: ['email', 'google', 'github', 'telegram'] },
     },
   },
-  response: {
+  response: responses({
     204: { type: 'null', description: 'Unlinked' },
-  },
+  }),
 };
 
 export const getMeRouteSchema: FastifySchema = {
   tags: ['Auth'],
   summary: 'Get the current authenticated user',
+  description:
+    'Returns the account behind the bearer access token. Never includes the password hash.',
   security: [{ bearerAuth: [] }],
-  response: { 200: userShape },
+  response: responses({ 200: userShape }),
 };
 
 export const updateMeRouteSchema: FastifySchema = {
   tags: ['Auth'],
   summary: 'Update the current authenticated user',
+  description:
+    'Updates the current account’s mutable profile fields (`display_name`, `avatar_url`).',
   security: [{ bearerAuth: [] }],
   body: {
     type: 'object',
@@ -477,5 +516,5 @@ export const updateMeRouteSchema: FastifySchema = {
       avatar_url: { type: 'string', nullable: true },
     },
   },
-  response: { 200: userShape },
+  response: responses({ 200: userShape }),
 };

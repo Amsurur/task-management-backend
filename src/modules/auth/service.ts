@@ -1,7 +1,7 @@
-import * as argon2 from 'argon2';
 import type { PrismaClient, User, AuthIdentity, AuthProvider } from '@prisma/client';
 import { config } from '../../config/index.js';
 import { AppError } from '../../lib/errors.js';
+import { hashSecret, verifySecret } from '../../lib/password.js';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../../lib/jwt.js';
 import { parseDurationMs } from '../../lib/duration.js';
 import { sendOtpEmail } from '../../lib/email.js';
@@ -64,7 +64,7 @@ export async function register(prisma: PrismaClient, body: RegisterBody): Promis
     }
   }
 
-  const password_hash = await argon2.hash(body.password);
+  const password_hash = await hashSecret(body.password);
   const user = await prisma.user.create({
     data: { email: body.email, password_hash, display_name: body.display_name },
   });
@@ -91,7 +91,7 @@ export async function login(prisma: PrismaClient, body: LoginBody): Promise<Auth
   const valid =
     user !== null &&
     user.password_hash !== null &&
-    (await argon2.verify(user.password_hash, body.password).catch(() => false));
+    (await verifySecret(user.password_hash, body.password));
 
   if (!user || !valid) throw AppError.unauthorized('Invalid email or password');
   if (!user.is_active) {
@@ -129,7 +129,7 @@ export async function emailSignup(
   const existing = await prisma.user.findUnique({ where: { email: body.email } });
 
   if (!existing) {
-    const password_hash = await argon2.hash(body.password);
+    const password_hash = await hashSecret(body.password);
     await prisma.user.create({
       data: {
         email: body.email,
@@ -140,7 +140,7 @@ export async function emailSignup(
       },
     });
   } else if (!existing.email_verified) {
-    const password_hash = await argon2.hash(body.password);
+    const password_hash = await hashSecret(body.password);
     await prisma.user.update({
       where: { id: existing.id },
       data: { password_hash, display_name: body.display_name, is_active: false },
