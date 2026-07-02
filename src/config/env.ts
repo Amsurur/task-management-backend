@@ -55,6 +55,21 @@ export const envSchema = z
     // --- Frontend --- (where OAuth/Telegram flows redirect the browser back to)
     FRONTEND_URL: z.string().url().default('http://localhost:5173'),
 
+    // --- Email / SMTP --- (transactional email: OTP codes, invites; auth_tz.md §6)
+    // Dev/test with no SMTP_HOST logs emails to the console. In production (or any
+    // env with SMTP_HOST set) mail is sent via this SMTP transport.
+    SMTP_HOST: z.string().min(1).optional(),
+    SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
+    /** Use implicit TLS (true for port 465); STARTTLS is negotiated otherwise. */
+    SMTP_SECURE: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
+    SMTP_USER: z.string().min(1).optional(),
+    SMTP_PASS: z.string().min(1).optional(),
+    /** From: address on outgoing mail. */
+    MAIL_FROM: z.string().min(1).default('Task Management <no-reply@taskmgmt.local>'),
+
     // --- OAuth: Google --- (required only when the Google flow is used; validated lazily)
     GOOGLE_CLIENT_ID: z.string().min(1).optional(),
     GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),

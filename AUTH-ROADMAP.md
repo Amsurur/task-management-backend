@@ -9,9 +9,9 @@
 
 ## Current Status
 
-- **Current Phase:** Phase A1 — Email + password (OTP verification) (**0/6 done**)
-- **Last Session:** 2026-07-01 (**A0 complete**: refresh httpOnly-cookie plumbing landed via `@fastify/cookie` + `src/lib/session-cookie.ts` / `src/lib/duration.ts`; all 9 migrations applied to the remote DB; `prisma generate` re-run. Verified: `npm run build` green, ESLint + Prettier clean, auth integration tests 10/10, multi-tenant 8/8.)
-- **Next Task:** Phase A1 → Email sender abstraction (`lib/mailer`) — dev logs to console, prod SMTP/provider behind env.
+- **Current Phase:** Phase A2 — Google OAuth (**0/4 done**)
+- **Last Session:** 2026-07-02 (**A1 complete**: email+password OTP flow — `lib/mailer` (nodemailer/console) + `sendOtpEmail`; `otp.service` (issue/verify with 1-per-60s + 5-per-hour rate limit, 10-min TTL, ≤5 attempts, single-use); `/auth/email/{signup,verify,login}`; `ensureEmailIdentity`; `AppError.rateLimited`. Verified: build green, ESLint/Prettier clean, new `email-auth` tests 5/5, auth 10/10 + invites 17/17 (no regressions).)
+- **Next Task:** Phase A2 → `GET /auth/google` — redirect to Google with a `state` (CSRF) param stored server-side/cookie (reuse `src/lib/oauth-state.ts`).
 - **Env notes:** DB reachable only with `?sslmode=require&connect_timeout=30` appended to `DATABASE_URL` (Render free tier: high latency + idle spin-down). Heavier integration suites need a raised vitest `hookTimeout` here (default 10s is too short for the remote-DB seed hooks — e.g. `--hookTimeout 120000`); the auth suite passes at the default.
 
 ---
@@ -53,12 +53,12 @@ Locked from `auth_tz.md` §9 and §1. Do not re-litigate during the build.
 
 ## Phase A1 — Email + password (OTP verification)
 
-- [ ] Email sender abstraction (`lib/mailer`) — dev logs to console, prod SMTP/provider behind env
-- [ ] `POST /auth/email/signup` — create user inactive + `email_verified=false`, generate 6-digit OTP (store `code_hash`), send email; if email already exists, do **not** duplicate — route to verify-into-existing
-- [ ] `POST /auth/email/verify` — check OTP (expiry, ≤5 attempts, single-use) → set `email_verified=true`, activate, issue session
-- [ ] Update `POST /auth/email/login` — honest "invalid email or password" on miss; if account has no `password_hash`, return "sign in with Google/GitHub" + offer to set a password
-- [ ] OTP send rate limit (1 / 60s, 5 / hour per email) + attempt/expiry invalidation
-- [ ] `email` identity row created/ensured on successful signup
+- [x] Email sender abstraction (`lib/mailer`) — `src/lib/mailer.ts`: `sendMail()` logs a stub to console in dev/test (no SMTP_HOST) and sends via nodemailer SMTP when configured (all behind env). `src/lib/email.ts` refactored to build messages (`sendInviteEmail`, new `sendOtpEmail`) on top of it
+- [x] `POST /auth/email/signup` — creates user inactive + `email_verified=false`, issues a 6-digit OTP (argon2 `code_hash`) and emails it (`service.emailSignup` + `otp.service.issueOtp`). Existing email is never duplicated: unverified accounts may correct their password, verified accounts are untouched — both still get a code to verify into (existence not leaked)
+- [x] `POST /auth/email/verify` — `otp.service.verifyOtp` enforces expiry / ≤5 attempts / single-use → sets `email_verified=true` + `is_active=true`, ensures the `email` identity, issues a session (+ refresh cookie)
+- [x] Update `POST /auth/email/login` — reuses the `login` service: honest "invalid email or password" on miss; no-`password_hash` accounts guided to Google/GitHub; unverified accounts guided to verify first (route mounted at `/auth/email/login`, legacy `/auth/login` kept)
+- [x] OTP send rate limit (1 / 60s, 5 / hour per email) + attempt/expiry invalidation — in `otp.service` (`enforceSendRateLimit` + attempt cap / expiry / single-use invalidation); 429 via new `AppError.rateLimited`
+- [x] `email` identity row created/ensured on successful signup — idempotent `ensureEmailIdentity` (checks user+provider first, since `email` identities have a null `provider_user_id`)
 
 ## Phase A2 — Google OAuth
 

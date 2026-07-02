@@ -4,8 +4,16 @@ import { config } from '../../config/index.js';
 import { AppError } from '../../lib/errors.js';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../../lib/jwt.js';
 import { parseDurationMs } from '../../lib/duration.js';
+import { sendOtpEmail } from '../../lib/email.js';
 import { acceptInviteAfterRegister } from '../invites/service.js';
-import type { RegisterBody, LoginBody, UpdateMeBody } from './schema.js';
+import { issueOtp, verifyOtp } from './otp.service.js';
+import type {
+  RegisterBody,
+  LoginBody,
+  UpdateMeBody,
+  EmailSignupBody,
+  EmailVerifyBody,
+} from './schema.js';
 
 export interface AuthTokens {
   access_token: string;
@@ -76,9 +84,87 @@ export async function login(prisma: PrismaClient, body: LoginBody): Promise<Auth
     (await argon2.verify(user.password_hash, body.password).catch(() => false));
 
   if (!user || !valid) throw AppError.unauthorized('Invalid email or password');
-  if (!user.is_active) throw AppError.forbidden('This account has been deactivated');
+  if (!user.is_active) {
+    // An email account that never confirmed its OTP is inactive + unverified —
+    // guide it to verification rather than the generic "deactivated" (§6).
+    if (!user.email_verified) {
+      throw AppError.forbidden(
+        'Please verify your email address first. Check your inbox for the verification code.',
+      );
+    }
+    throw AppError.forbidden('This account has been deactivated');
+  }
 
   return issueTokenPair(prisma, user);
+}
+
+// ─── Email + password with OTP verification (auth_tz.md §6) ─────────────────────
+
+export interface OtpChallenge {
+  status: 'otp_sent';
+  email: string;
+}
+
+/**
+ * Start email+password signup: create the account **inactive + unverified**, then
+ * issue and email a 6-digit OTP. If the email already exists we never duplicate it
+ * (§6): a still-unverified account may correct its password; a verified account is
+ * left untouched and simply receives a code to verify into (the response is
+ * identical either way, so account existence isn't leaked).
+ */
+export async function emailSignup(
+  prisma: PrismaClient,
+  body: EmailSignupBody,
+): Promise<OtpChallenge> {
+  const existing = await prisma.user.findUnique({ where: { email: body.email } });
+
+  if (!existing) {
+    const password_hash = await argon2.hash(body.password);
+    await prisma.user.create({
+      data: {
+        email: body.email,
+        password_hash,
+        display_name: body.display_name,
+        email_verified: false,
+        is_active: false,
+      },
+    });
+  } else if (!existing.email_verified) {
+    const password_hash = await argon2.hash(body.password);
+    await prisma.user.update({
+      where: { id: existing.id },
+      data: { password_hash, display_name: body.display_name, is_active: false },
+    });
+  }
+  // else: verified account — do not modify; still send a code to verify into it.
+
+  const code = await issueOtp(prisma, body.email, 'signup');
+  await sendOtpEmail(body.email, code, 'signup');
+
+  return { status: 'otp_sent', email: body.email };
+}
+
+/**
+ * Complete signup: validate the OTP (expiry / attempts / single-use), mark the
+ * account verified + active, ensure its `email` identity row, and issue a session.
+ */
+export async function emailVerify(
+  prisma: PrismaClient,
+  body: EmailVerifyBody,
+): Promise<AuthTokens> {
+  await verifyOtp(prisma, body.email, 'signup', body.code);
+
+  const user = await prisma.user.findUnique({ where: { email: body.email } });
+  if (!user) throw AppError.notFound('No account found for this email');
+
+  const activated = await prisma.user.update({
+    where: { id: user.id },
+    data: { email_verified: true, is_active: true },
+  });
+
+  await ensureEmailIdentity(prisma, activated.id, activated.email);
+
+  return issueTokenPair(prisma, activated);
 }
 
 export async function refresh(prisma: PrismaClient, rawToken: string): Promise<AuthTokens> {
@@ -142,6 +228,26 @@ export async function updateMe(
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Ensure the account has an `email` identity row (auth_tz.md §2). Idempotent:
+ * `email` identities have a null `provider_user_id`, so the (provider,
+ * provider_user_id) unique can't dedupe them — we check by user + provider first.
+ */
+async function ensureEmailIdentity(
+  prisma: PrismaClient,
+  userId: string,
+  email: string | null,
+): Promise<void> {
+  const existing = await prisma.authIdentity.findFirst({
+    where: { user_id: userId, provider: 'email' },
+  });
+  if (existing) return;
+
+  await prisma.authIdentity.create({
+    data: { user_id: userId, provider: 'email', provider_user_id: null, provider_email: email },
+  });
+}
 
 async function issueTokenPair(prisma: PrismaClient, user: User): Promise<AuthTokens> {
   // Create the DB row first to obtain its `id`, which becomes the JWT `jti`.

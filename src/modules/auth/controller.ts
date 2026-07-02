@@ -11,6 +11,8 @@ import {
   LoginBodySchema,
   RefreshBodySchema,
   UpdateMeBodySchema,
+  EmailSignupBodySchema,
+  EmailVerifyBodySchema,
 } from './schema.js';
 
 export async function registerHandler(request: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -23,6 +25,25 @@ export async function registerHandler(request: FastifyRequest, reply: FastifyRep
 export async function loginHandler(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   const body = LoginBodySchema.parse(request.body);
   const result = await authService.login(request.server.prisma, body);
+  setRefreshCookie(reply, result.refresh_token);
+  reply.send(result);
+}
+
+export async function emailSignupHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const body = EmailSignupBodySchema.parse(request.body);
+  const result = await authService.emailSignup(request.server.prisma, body);
+  reply.send(result);
+}
+
+export async function emailVerifyHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const body = EmailVerifyBodySchema.parse(request.body);
+  const result = await authService.emailVerify(request.server.prisma, body);
   setRefreshCookie(reply, result.refresh_token);
   reply.send(result);
 }

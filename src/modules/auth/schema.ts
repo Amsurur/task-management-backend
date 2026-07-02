@@ -32,10 +32,25 @@ export const UpdateMeBodySchema = z.object({
   avatar_url: z.string().url().optional().nullable(),
 });
 
+// Email+password signup — same fields as register, but no invite_token (OTP flow).
+export const EmailSignupBodySchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+  display_name: z.string().min(1).max(100),
+});
+
+// Confirm a signup OTP: the email it was sent to + the 6-digit code.
+export const EmailVerifyBodySchema = z.object({
+  email: z.string().email(),
+  code: z.string().regex(/^\d{6}$/, 'Code must be 6 digits'),
+});
+
 export type RegisterBody = z.infer<typeof RegisterBodySchema>;
 export type LoginBody = z.infer<typeof LoginBodySchema>;
 export type RefreshBody = z.infer<typeof RefreshBodySchema>;
 export type UpdateMeBody = z.infer<typeof UpdateMeBodySchema>;
+export type EmailSignupBody = z.infer<typeof EmailSignupBodySchema>;
+export type EmailVerifyBody = z.infer<typeof EmailVerifyBodySchema>;
 
 // ─── Fastify route schemas (for OpenAPI + request validation) ─────────────────
 
@@ -86,6 +101,67 @@ export const registerRouteSchema: FastifySchema = {
 export const loginRouteSchema: FastifySchema = {
   tags: ['Auth'],
   summary: 'Login with email and password',
+  body: {
+    type: 'object',
+    required: ['email', 'password'],
+    properties: {
+      email: { type: 'string', format: 'email' },
+      password: { type: 'string', minLength: 1 },
+    },
+  },
+  response: {
+    200: tokenPair,
+  },
+};
+
+const otpChallenge = {
+  type: 'object',
+  properties: {
+    status: { type: 'string', enum: ['otp_sent'] },
+    email: { type: 'string' },
+  },
+} as const;
+
+export const emailSignupRouteSchema: FastifySchema = {
+  tags: ['Auth'],
+  summary: 'Start email+password signup — creates an inactive account and emails a 6-digit OTP',
+  description:
+    'Creates the account inactive + unverified and sends a verification code. If the email already exists it is not duplicated; a code is still sent so the owner can verify into the existing account.',
+  body: {
+    type: 'object',
+    required: ['email', 'password', 'display_name'],
+    properties: {
+      email: { type: 'string', format: 'email' },
+      password: { type: 'string', minLength: 8 },
+      display_name: { type: 'string', minLength: 1, maxLength: 100 },
+    },
+  },
+  response: {
+    200: otpChallenge,
+  },
+};
+
+export const emailVerifyRouteSchema: FastifySchema = {
+  tags: ['Auth'],
+  summary: 'Confirm a signup OTP — verifies + activates the account and issues a session',
+  body: {
+    type: 'object',
+    required: ['email', 'code'],
+    properties: {
+      email: { type: 'string', format: 'email' },
+      code: { type: 'string', pattern: '^\\d{6}$' },
+    },
+  },
+  response: {
+    200: tokenPair,
+  },
+};
+
+export const emailLoginRouteSchema: FastifySchema = {
+  tags: ['Auth'],
+  summary: 'Login with email and password',
+  description:
+    'Honest "invalid email or password" on miss. Accounts with no password are guided to their OAuth provider; unverified accounts are guided to verify first.',
   body: {
     type: 'object',
     required: ['email', 'password'],
