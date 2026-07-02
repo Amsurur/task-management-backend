@@ -9,9 +9,9 @@
 
 ## Current Status
 
-- **Current Phase:** Phase A2 — Google OAuth (**0/4 done**)
-- **Last Session:** 2026-07-02 (**A1 complete**: email+password OTP flow — `lib/mailer` (nodemailer/console) + `sendOtpEmail`; `otp.service` (issue/verify with 1-per-60s + 5-per-hour rate limit, 10-min TTL, ≤5 attempts, single-use); `/auth/email/{signup,verify,login}`; `ensureEmailIdentity`; `AppError.rateLimited`. Verified: build green, ESLint/Prettier clean, new `email-auth` tests 5/5, auth 10/10 + invites 17/17 (no regressions).)
-- **Next Task:** Phase A2 → `GET /auth/google` — redirect to Google with a `state` (CSRF) param stored server-side/cookie (reuse `src/lib/oauth-state.ts`).
+- **Current Phase:** Phase A3 — GitHub OAuth (**0/4 done**)
+- **Last Session:** 2026-07-02 (**A2 complete**: Google OAuth — `google.service.ts` (`buildGoogleAuthUrl` + `exchangeGoogleCode`, claims read from the `id_token`); `oauth-state.ts` gains double-submit `setStateCookie`/`clearStateCookie`/`verifyCallbackState`; `service.loginWithProvider` (find-or-create + issue session, reuses `findOrCreateFromProvider`); `GET /auth/google` + `/auth/google/callback` handlers/schemas/routes; success → refresh cookie + 302 to `FRONTEND_URL#access_token=`, failures → `#error=`. Test env gains `GOOGLE_*` (tests/setup.ts). Verified: build green, ESLint clean, Prettier clean on touched files, new `google-oauth` tests 4/4, auth 10/10 + email-auth 5/5 + invites 17/17 (no regressions). Note: remote-DB latency needs a raised vitest `--testTimeout` (e.g. 30000) for the argon2-heavy email suite, not just `--hookTimeout`.)
+- **Next Task:** Phase A3 → `GET /auth/github` — redirect with `state`, scope `read:user user:email` (reuse `oauth-state.ts` state-cookie helpers + `service.loginWithProvider`; mirror `google.service.ts`).
 - **Env notes:** DB reachable only with `?sslmode=require&connect_timeout=30` appended to `DATABASE_URL` (Render free tier: high latency + idle spin-down). Heavier integration suites need a raised vitest `hookTimeout` here (default 10s is too short for the remote-DB seed hooks — e.g. `--hookTimeout 120000`); the auth suite passes at the default.
 
 ---
@@ -62,10 +62,10 @@ Locked from `auth_tz.md` §9 and §1. Do not re-litigate during the build.
 
 ## Phase A2 — Google OAuth
 
-- [ ] `GET /auth/google` — redirect to Google with `state` (CSRF) stored server-side/cookie
-- [ ] `GET /auth/google/callback` — verify `state`, exchange `code`, read `sub` / `email` / `name` / `picture`
-- [ ] Find-or-create: identity by (`google`, `sub`) → else user by verified `email` (auto-merge) → else create; issue session, redirect to frontend
-- [ ] `google` identity row persisted with `provider_email`
+- [x] `GET /auth/google` — redirect to Google with `state` (CSRF) stored server-side/cookie — `googleRedirectHandler` mints `createState()`, stores it double-submit via new `setStateCookie` (short-lived httpOnly `oauth_state`, lax), 302s to `accounts.google.com/o/oauth2/v2/auth` (scope `openid email profile`, `prompt=select_account`); URL built by `google.service.ts` `buildGoogleAuthUrl`
+- [x] `GET /auth/google/callback` — verify `state`, exchange `code`, read `sub` / `email` / `name` / `picture` — `googleCallbackHandler` clears the state cookie, checks `verifyCallbackState` (cookie match + signature/TTL), then `exchangeGoogleCode` POSTs the token endpoint and reads claims from the `id_token` (no sig check — token came straight from Google over TLS). `error`/CSRF/exchange failures redirect to the frontend with an `#error=` fragment
+- [x] Find-or-create: identity by (`google`, `sub`) → else user by verified `email` (auto-merge) → else create; issue session, redirect to frontend — via new `service.loginWithProvider` reusing the existing `findOrCreateFromProvider`; on success sets the refresh cookie and 302s to `FRONTEND_URL` with `#access_token=` (fragment keeps it out of logs/history)
+- [x] `google` identity row persisted with `provider_email` — handled by `findOrCreateFromProvider` (create + auto-merge paths both write `provider_email`); asserted by the happy-path test
 
 ## Phase A3 — GitHub OAuth
 

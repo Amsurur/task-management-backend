@@ -7,6 +7,7 @@ import { parseDurationMs } from '../../lib/duration.js';
 import { sendOtpEmail } from '../../lib/email.js';
 import { acceptInviteAfterRegister } from '../invites/service.js';
 import { issueOtp, verifyOtp } from './otp.service.js';
+import { findOrCreateFromProvider, type ProviderProfile } from './identity.service.js';
 import type {
   RegisterBody,
   LoginBody,
@@ -165,6 +166,22 @@ export async function emailVerify(
   await ensureEmailIdentity(prisma, activated.id, activated.email);
 
   return issueTokenPair(prisma, activated);
+}
+
+// ─── OAuth / Telegram sign-in (auth_tz.md §1, §3–§5, §7) ────────────────────────
+
+/**
+ * Turn a resolved provider profile into a session: find-or-create the local
+ * account (auto-merging onto an existing account by verified email; §5), then
+ * issue a token pair. Shared by every OAuth/Telegram callback — email+password is
+ * the only flow that does not go through here.
+ */
+export async function loginWithProvider(
+  prisma: PrismaClient,
+  profile: ProviderProfile,
+): Promise<AuthTokens> {
+  const user = await findOrCreateFromProvider(prisma, profile);
+  return issueTokenPair(prisma, user);
 }
 
 export async function refresh(prisma: PrismaClient, rawToken: string): Promise<AuthTokens> {

@@ -1,5 +1,7 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import * as authService from './service.js';
+import { buildGoogleAuthUrl, exchangeGoogleCode } from './google.service.js';
+import { config } from '../../config/index.js';
 import { AppError } from '../../lib/errors.js';
 import {
   setRefreshCookie,
@@ -7,13 +9,36 @@ import {
   readRefreshCookie,
 } from '../../lib/session-cookie.js';
 import {
+  createState,
+  setStateCookie,
+  clearStateCookie,
+  verifyCallbackState,
+} from '../../lib/oauth-state.js';
+import {
   RegisterBodySchema,
   LoginBodySchema,
   RefreshBodySchema,
   UpdateMeBodySchema,
   EmailSignupBodySchema,
   EmailVerifyBodySchema,
+  GoogleCallbackQuerySchema,
 } from './schema.js';
+
+/** Frontend URL to bounce the browser to after a successful OAuth login. */
+function frontendSuccessUrl(accessToken: string): string {
+  const url = new URL(config.FRONTEND_URL);
+  // Access token in the fragment: never sent to servers, kept out of logs/history.
+  // The refresh token rides along separately in the httpOnly cookie.
+  url.hash = `access_token=${encodeURIComponent(accessToken)}`;
+  return url.toString();
+}
+
+/** Frontend URL to bounce the browser to when an OAuth flow fails. */
+function frontendErrorUrl(code: string): string {
+  const url = new URL(config.FRONTEND_URL);
+  url.hash = `error=${encodeURIComponent(code)}`;
+  return url.toString();
+}
 
 export async function registerHandler(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   const body = RegisterBodySchema.parse(request.body);
@@ -46,6 +71,65 @@ export async function emailVerifyHandler(
   const result = await authService.emailVerify(request.server.prisma, body);
   setRefreshCookie(reply, result.refresh_token);
   reply.send(result);
+}
+
+// ─── Google OAuth (auth_tz.md §3) ───────────────────────────────────────────────
+
+export async function googleRedirectHandler(
+  _request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const state = createState();
+  const url = buildGoogleAuthUrl(state);
+  setStateCookie(reply, state);
+  reply.redirect(url); // 302 by default
+}
+
+export async function googleCallbackHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const query = GoogleCallbackQuerySchema.parse(request.query ?? {});
+
+  // The state cookie is single-use regardless of outcome — clear it once we've read it.
+  clearStateCookie(reply);
+
+  // User declined consent (or Google reported an error) — bounce back cleanly.
+  if (query.error) {
+    reply.redirect(frontendErrorUrl(query.error));
+    return;
+  }
+
+  // CSRF: `state` must match the browser cookie AND be a fresh token we minted.
+  if (!verifyCallbackState(query.state, request.cookies)) {
+    reply.redirect(frontendErrorUrl('invalid_state'));
+    return;
+  }
+
+  if (!query.code) {
+    reply.redirect(frontendErrorUrl('missing_code'));
+    return;
+  }
+
+  let result: authService.AuthTokens;
+  try {
+    const profile = await exchangeGoogleCode(query.code);
+    result = await authService.loginWithProvider(request.server.prisma, {
+      provider: 'google',
+      provider_user_id: profile.sub,
+      email: profile.email,
+      email_verified: profile.email_verified,
+      display_name: profile.name,
+      avatar_url: profile.picture,
+    });
+  } catch (err) {
+    request.log.error({ err }, 'Google OAuth callback failed');
+    reply.redirect(frontendErrorUrl('google_login_failed'));
+    return;
+  }
+
+  setRefreshCookie(reply, result.refresh_token);
+  reply.redirect(frontendSuccessUrl(result.access_token));
 }
 
 export async function refreshHandler(request: FastifyRequest, reply: FastifyReply): Promise<void> {

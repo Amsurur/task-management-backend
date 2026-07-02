@@ -45,12 +45,21 @@ export const EmailVerifyBodySchema = z.object({
   code: z.string().regex(/^\d{6}$/, 'Code must be 6 digits'),
 });
 
+// Google OAuth callback query params. All optional: Google sends `code` + `state`
+// on success, or `error` (e.g. `access_denied`) when the user declines consent.
+export const GoogleCallbackQuerySchema = z.object({
+  code: z.string().min(1).optional(),
+  state: z.string().min(1).optional(),
+  error: z.string().min(1).optional(),
+});
+
 export type RegisterBody = z.infer<typeof RegisterBodySchema>;
 export type LoginBody = z.infer<typeof LoginBodySchema>;
 export type RefreshBody = z.infer<typeof RefreshBodySchema>;
 export type UpdateMeBody = z.infer<typeof UpdateMeBodySchema>;
 export type EmailSignupBody = z.infer<typeof EmailSignupBodySchema>;
 export type EmailVerifyBody = z.infer<typeof EmailVerifyBodySchema>;
+export type GoogleCallbackQuery = z.infer<typeof GoogleCallbackQuerySchema>;
 
 // ─── Fastify route schemas (for OpenAPI + request validation) ─────────────────
 
@@ -172,6 +181,34 @@ export const emailLoginRouteSchema: FastifySchema = {
   },
   response: {
     200: tokenPair,
+  },
+};
+
+export const googleRedirectRouteSchema: FastifySchema = {
+  tags: ['Auth'],
+  summary: 'Begin Google OAuth — redirects to the Google consent screen',
+  description:
+    'Mints a CSRF `state`, stores it in a short-lived httpOnly cookie, and 302-redirects the browser to Google.',
+  response: {
+    302: { type: 'null', description: 'Redirect to Google' },
+  },
+};
+
+export const googleCallbackRouteSchema: FastifySchema = {
+  tags: ['Auth'],
+  summary: 'Google OAuth callback — verifies state, exchanges the code, issues a session',
+  description:
+    'Verifies the `state` against the browser cookie (CSRF), exchanges the authorization code for the Google profile, find-or-creates the account (auto-merging by verified email), sets the refresh cookie and redirects to the frontend with an access token in the URL fragment. Failures redirect to the frontend with an `error` fragment.',
+  querystring: {
+    type: 'object',
+    properties: {
+      code: { type: 'string' },
+      state: { type: 'string' },
+      error: { type: 'string' },
+    },
+  },
+  response: {
+    302: { type: 'null', description: 'Redirect to the frontend (or an error page)' },
   },
 };
 
