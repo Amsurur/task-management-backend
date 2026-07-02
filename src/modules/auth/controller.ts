@@ -17,6 +17,7 @@ import {
 } from '../../lib/oauth-state.js';
 import { setTelegramSessionCookie, readTelegramSessionCookie } from '../../lib/telegram-session.js';
 import { generateSessionId } from './telegram-login.service.js';
+import type { ProviderProfile } from './identity.service.js';
 import {
   RegisterBodySchema,
   LoginBodySchema,
@@ -28,6 +29,9 @@ import {
   GithubCallbackQuerySchema,
   TelegramStatusQuerySchema,
   TelegramUpdateSchema,
+  LinkIdentityParamsSchema,
+  UnlinkIdentityParamsSchema,
+  LinkIdentityBodySchema,
 } from './schema.js';
 
 /** Frontend URL to bounce the browser to after a successful OAuth login. */
@@ -260,6 +264,68 @@ export async function logoutHandler(request: FastifyRequest, reply: FastifyReply
   const token = readRefreshCookie(request.cookies) ?? bodyToken;
   if (token) await authService.logout(request.server.prisma, token);
   clearRefreshCookie(reply);
+  reply.code(204).send();
+}
+
+// ─── Connected-accounts management (auth_tz.md §10) ─────────────────────────────
+// All three use the `authenticate` preHandler, so request.userId is set.
+
+export async function listIdentitiesHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const identities = await authService.listIdentities(request.server.prisma, request.userId);
+  reply.send(identities);
+}
+
+export async function linkIdentityHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const { provider } = LinkIdentityParamsSchema.parse(request.params);
+  const body = LinkIdentityBodySchema.parse(request.body ?? {});
+  const { prisma } = request.server;
+
+  // Telegram links from a confirmed login token (bound to this browser session);
+  // Google/GitHub links from an OAuth authorization code the client just obtained.
+  if (provider === 'telegram') {
+    if (!body.token) throw AppError.badRequest('A confirmed Telegram token is required');
+    const sessionId = readTelegramSessionCookie(request.cookies);
+    const identity = await authService.linkTelegram(prisma, request.userId, body.token, sessionId);
+    reply.send(identity);
+    return;
+  }
+
+  if (!body.code) throw AppError.badRequest('An OAuth authorization code is required');
+  let profile: ProviderProfile;
+  if (provider === 'google') {
+    const g = await exchangeGoogleCode(body.code);
+    profile = {
+      provider: 'google',
+      provider_user_id: g.sub,
+      email: g.email,
+      email_verified: g.email_verified,
+    };
+  } else {
+    const gh = await exchangeGithubCode(body.code);
+    profile = {
+      provider: 'github',
+      provider_user_id: gh.id,
+      email: gh.email,
+      email_verified: gh.email_verified,
+    };
+  }
+
+  const identity = await authService.linkIdentity(prisma, request.userId, profile);
+  reply.send(identity);
+}
+
+export async function unlinkIdentityHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const { provider } = UnlinkIdentityParamsSchema.parse(request.params);
+  await authService.unlinkIdentity(request.server.prisma, request.userId, provider);
   reply.code(204).send();
 }
 

@@ -1,5 +1,5 @@
 import * as argon2 from 'argon2';
-import type { PrismaClient, User } from '@prisma/client';
+import type { PrismaClient, User, AuthIdentity, AuthProvider } from '@prisma/client';
 import { config } from '../../config/index.js';
 import { AppError } from '../../lib/errors.js';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../../lib/jwt.js';
@@ -191,6 +191,126 @@ export async function loginWithProvider(
 ): Promise<AuthTokens> {
   const user = await findOrCreateFromProvider(prisma, profile);
   return issueTokenPair(prisma, user);
+}
+
+// ─── Connected-accounts management (auth_tz.md §10) ─────────────────────────────
+
+/** A linked login method as returned to the "Connected accounts" screen. */
+export interface IdentitySummary {
+  id: string;
+  provider: AuthProvider;
+  provider_email: string | null;
+  created_at: Date;
+}
+
+function toIdentitySummary(identity: AuthIdentity): IdentitySummary {
+  return {
+    id: identity.id,
+    provider: identity.provider,
+    provider_email: identity.provider_email,
+    created_at: identity.created_at,
+  };
+}
+
+/** List the account's linked login methods, oldest first (auth_tz.md §10). */
+export async function listIdentities(
+  prisma: PrismaClient,
+  userId: string,
+): Promise<IdentitySummary[]> {
+  const identities = await prisma.authIdentity.findMany({
+    where: { user_id: userId },
+    orderBy: { created_at: 'asc' },
+  });
+  return identities.map(toIdentitySummary);
+}
+
+/**
+ * Attach a resolved provider identity to the current account (auth_tz.md §10).
+ * "Find" semantics with an ownership guard: if the (provider, provider_user_id)
+ * identity already exists it must belong to this user (idempotent) — otherwise it
+ * is owned by someone else and we refuse rather than steal it. A brand-new identity
+ * is created against this account. Runs in a transaction so the check + create are
+ * atomic; the UNIQUE(provider, provider_user_id) constraint is the final backstop.
+ */
+export async function linkIdentity(
+  prisma: PrismaClient,
+  userId: string,
+  profile: ProviderProfile,
+): Promise<IdentitySummary> {
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.authIdentity.findUnique({
+      where: {
+        provider_provider_user_id: {
+          provider: profile.provider,
+          provider_user_id: profile.provider_user_id,
+        },
+      },
+    });
+
+    if (existing) {
+      if (existing.user_id === userId) return toIdentitySummary(existing); // already linked
+      throw AppError.conflict('This login method is already linked to a different account');
+    }
+
+    const created = await tx.authIdentity.create({
+      data: {
+        user_id: userId,
+        provider: profile.provider,
+        provider_user_id: profile.provider_user_id,
+        provider_email: profile.email ?? null,
+      },
+    });
+    return toIdentitySummary(created);
+  });
+}
+
+/**
+ * Link a Telegram account to the current user (auth_tz.md §10). Consumes a
+ * confirmed login token (enforces its session binding + TTL + one-time use via
+ * {@link consumeLoginToken}), then attaches the tapper's telegram_id. The token
+ * must already be `confirmed`; anything else means the handshake isn't complete.
+ */
+export async function linkTelegram(
+  prisma: PrismaClient,
+  userId: string,
+  token: string,
+  sessionId: string | undefined,
+): Promise<IdentitySummary> {
+  const state = await consumeLoginToken(prisma, token, sessionId);
+  if (state.status !== 'confirmed') {
+    throw AppError.badRequest(
+      `Telegram sign-in is not confirmed yet (status: ${state.status}). Confirm in the bot, then retry.`,
+    );
+  }
+  return linkIdentity(prisma, userId, {
+    provider: 'telegram',
+    provider_user_id: state.telegram_id,
+  });
+}
+
+/**
+ * Unlink the account's login method(s) for a provider (auth_tz.md §10). Hard guard:
+ * the last remaining login method cannot be removed — that would lock the user out
+ * of every sign-in flow. 404 when the provider isn't linked at all.
+ */
+export async function unlinkIdentity(
+  prisma: PrismaClient,
+  userId: string,
+  provider: AuthProvider,
+): Promise<void> {
+  const identities = await prisma.authIdentity.findMany({ where: { user_id: userId } });
+  const targeted = identities.filter((i) => i.provider === provider);
+
+  if (targeted.length === 0) {
+    throw AppError.notFound('No linked login method for this provider');
+  }
+  if (identities.length - targeted.length < 1) {
+    throw AppError.forbidden(
+      'Cannot remove your last login method — link another sign-in method first',
+    );
+  }
+
+  await prisma.authIdentity.deleteMany({ where: { user_id: userId, provider } });
 }
 
 // ─── Telegram deep-link login (auth_tz.md §7) ───────────────────────────────────

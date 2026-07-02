@@ -9,9 +9,9 @@
 
 ## Current Status
 
-- **Current Phase:** Phase A5 — Connected-accounts management (**0/3 done**)
-- **Last Session:** 2026-07-02 (**A4 complete**: Telegram deep-link login — `telegram.service.ts` (Bot API transport: `buildTelegramDeepLink`, `sendConfirmPrompt`/`sendBotMessage`/`answerCallbackQuery`, Update types) + `telegram-login.service.ts` (token lifecycle: `initLoginToken`/`confirmLoginToken`/`consumeLoginToken`/`sweepExpiredTokens`, 10-min TTL, one-time, session-bound); orchestration in `service.ts` (`telegramInit`, `handleTelegramUpdate`, `telegramStatus` reusing `loginWithProvider`); `POST /auth/telegram/init` (+ `tg_session` httpOnly cookie via `src/lib/telegram-session.ts`), `POST /auth/telegram/webhook` (secret-header guarded when `TELEGRAM_WEBHOOK_SECRET` set), `GET /auth/telegram/status`. New env `TELEGRAM_WEBHOOK_SECRET`; test env gains `TELEGRAM_BOT_TOKEN`/`_USERNAME` (tests/setup.ts). Verified: build green, ESLint + Prettier clean on touched files, new `telegram-auth` tests 6/6, auth 10/10 + google 4/4 + github 4/4 + email 5/5 + invites 17/17 (46/46, no regressions).)
-- **Next Task:** Phase A5 → `GET /auth/identities` — list the logged-in user's linked login methods (the `AuthIdentity` model + `authenticate` preHandler already exist; return provider + provider_email + created_at per identity).
+- **Current Phase:** Phase A6 — Hardening & tests (**0/5 done**)
+- **Last Session:** 2026-07-02 (**A5 complete**: Connected-accounts management — `service.ts` gains `listIdentities` / `linkIdentity` (txn find-or-own-or-conflict, `AppError.conflict` when owned by another user) / `linkTelegram` (consumes a confirmed session-bound token) / `unlinkIdentity` (404 unlinked / 403 last-method / 204); `controller.ts` `listIdentitiesHandler` + `linkIdentityHandler` (Google/GitHub reuse `exchangeGoogleCode`/`exchangeGithubCode` with the code in the body; Telegram reads the `tg_session` cookie) + `unlinkIdentityHandler`; three authenticated routes `GET /auth/identities`, `POST /auth/identities/:provider/link`, `DELETE /auth/identities/:provider`; new Zod + Fastify schemas incl. `identityShape` for OpenAPI. Verified: build green, ESLint + Prettier clean on touched files, new `connected-accounts` tests 10/10; full suite 92/94 — the only 2 failures are pre-existing `notifications.test.ts` Prisma **interactive-transaction timeouts** (default 5000 ms exceeded on the slow Render DB; a different pair fails each run) unrelated to auth.)
+- **Next Task:** Phase A6 → Verify `state`/CSRF on all OAuth flows; secrets only from validated env (audit `oauth-state.ts` usage in the Google/GitHub redirect + callback handlers; confirm no provider secret is read outside `config`).
 - **Env notes:** DB reachable only with `?sslmode=require&connect_timeout=30` appended to `DATABASE_URL` (Render free tier: high latency + idle spin-down). Heavier integration suites need a raised vitest `hookTimeout` here (default 10s is too short for the remote-DB seed hooks — e.g. `--hookTimeout 120000`); the auth suite passes at the default.
 
 ---
@@ -83,9 +83,9 @@ Locked from `auth_tz.md` §9 and §1. Do not re-litigate during the build.
 
 ## Phase A5 — Connected-accounts management
 
-- [ ] `GET /auth/identities` — list the logged-in user's linked login methods
-- [ ] `POST /auth/identities/:provider/link` — link a new OAuth/Telegram identity to the current account; reject if that identity already belongs to another user
-- [ ] `DELETE /auth/identities/:provider` — unlink, with hard guard: **cannot remove the last remaining login method**
+- [x] `GET /auth/identities` — list the logged-in user's linked login methods — `listIdentitiesHandler` (authenticated) → `service.listIdentities` returns `{ id, provider, provider_email, created_at }` per row, oldest-first
+- [x] `POST /auth/identities/:provider/link` — link a new OAuth/Telegram identity to the current account; reject if that identity already belongs to another user — `linkIdentityHandler` (authenticated): Google/GitHub reuse `exchangeGoogleCode`/`exchangeGithubCode` (code in body), Telegram via `service.linkTelegram` (consumes a confirmed `tg_session`-bound token). `service.linkIdentity` runs in a txn: find by (provider, provider_user_id) → own it (idempotent 200) / else-owned → 409 CONFLICT / else create; UNIQUE(provider, provider_user_id) is the backstop
+- [x] `DELETE /auth/identities/:provider` — unlink, with hard guard: **cannot remove the last remaining login method** — `unlinkIdentityHandler` (authenticated) → `service.unlinkIdentity`: 404 when the provider isn't linked, 403 FORBIDDEN when it's the account's last method, else `deleteMany` by (user, provider) → 204
 
 ## Phase A6 — Hardening & tests
 

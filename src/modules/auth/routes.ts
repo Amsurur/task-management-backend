@@ -17,6 +17,9 @@ import {
   telegramInitRouteSchema,
   telegramWebhookRouteSchema,
   telegramStatusRouteSchema,
+  listIdentitiesRouteSchema,
+  linkIdentityRouteSchema,
+  unlinkIdentityRouteSchema,
 } from './schema.js';
 import {
   registerHandler,
@@ -34,6 +37,9 @@ import {
   telegramInitHandler,
   telegramWebhookHandler,
   telegramStatusHandler,
+  listIdentitiesHandler,
+  linkIdentityHandler,
+  unlinkIdentityHandler,
 } from './controller.js';
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
@@ -55,6 +61,22 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   app.get('/telegram/status', { schema: telegramStatusRouteSchema }, telegramStatusHandler);
   app.post('/refresh', { schema: refreshRouteSchema }, refreshHandler);
   app.post('/logout', { schema: logoutRouteSchema }, logoutHandler);
+  // Connected-accounts management (auth_tz.md §10) — all require a session.
+  app.get(
+    '/identities',
+    { schema: listIdentitiesRouteSchema, preHandler: [authenticate] },
+    listIdentitiesHandler,
+  );
+  app.post(
+    '/identities/:provider/link',
+    { schema: linkIdentityRouteSchema, preHandler: [authenticate] },
+    linkIdentityHandler,
+  );
+  app.delete(
+    '/identities/:provider',
+    { schema: unlinkIdentityRouteSchema, preHandler: [authenticate] },
+    unlinkIdentityHandler,
+  );
   app.get('/me', { schema: getMeRouteSchema, preHandler: [authenticate] }, getMeHandler);
   app.patch('/me', { schema: updateMeRouteSchema, preHandler: [authenticate] }, updateMeHandler);
 }

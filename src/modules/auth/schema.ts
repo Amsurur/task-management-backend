@@ -96,6 +96,26 @@ export const TelegramUpdateSchema = z
   })
   .passthrough();
 
+// ─── Connected-accounts management (auth_tz.md §10) ────────────────────────────
+
+// Which login method a link/unlink request targets. Linking only makes sense for
+// OAuth/Telegram (email = "set a password", out of scope here); unlinking may
+// target any linked method, subject to the last-method guard in the service.
+export const LinkIdentityParamsSchema = z.object({
+  provider: z.enum(['google', 'github', 'telegram']),
+});
+export const UnlinkIdentityParamsSchema = z.object({
+  provider: z.enum(['email', 'google', 'github', 'telegram']),
+});
+
+// Proof that the caller controls the identity being linked: an OAuth authorization
+// `code` (Google/GitHub), or a confirmed Telegram login `token`. Exactly one is
+// required depending on the path provider — the controller enforces which.
+export const LinkIdentityBodySchema = z.object({
+  code: z.string().min(1).optional(),
+  token: z.string().min(1).optional(),
+});
+
 export type RegisterBody = z.infer<typeof RegisterBodySchema>;
 export type LoginBody = z.infer<typeof LoginBodySchema>;
 export type RefreshBody = z.infer<typeof RefreshBodySchema>;
@@ -105,6 +125,9 @@ export type EmailVerifyBody = z.infer<typeof EmailVerifyBodySchema>;
 export type GoogleCallbackQuery = z.infer<typeof GoogleCallbackQuerySchema>;
 export type GithubCallbackQuery = z.infer<typeof GithubCallbackQuerySchema>;
 export type TelegramStatusQuery = z.infer<typeof TelegramStatusQuerySchema>;
+export type LinkIdentityParams = z.infer<typeof LinkIdentityParamsSchema>;
+export type UnlinkIdentityParams = z.infer<typeof UnlinkIdentityParamsSchema>;
+export type LinkIdentityBody = z.infer<typeof LinkIdentityBodySchema>;
 
 // ─── Fastify route schemas (for OpenAPI + request validation) ─────────────────
 
@@ -369,6 +392,70 @@ export const logoutRouteSchema: FastifySchema = {
   },
   response: {
     204: { type: 'null', description: 'Logged out' },
+  },
+};
+
+// ─── Connected-accounts management (auth_tz.md §10) ────────────────────────────
+
+const identityShape = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    provider: { type: 'string', enum: ['email', 'google', 'github', 'telegram'] },
+    provider_email: { type: 'string', nullable: true },
+    created_at: { type: 'string', format: 'date-time' },
+  },
+} as const;
+
+export const listIdentitiesRouteSchema: FastifySchema = {
+  tags: ['Auth'],
+  summary: 'List the current account’s linked login methods',
+  security: [{ bearerAuth: [] }],
+  response: {
+    200: { type: 'array', items: identityShape },
+  },
+};
+
+export const linkIdentityRouteSchema: FastifySchema = {
+  tags: ['Auth'],
+  summary: 'Link a new OAuth/Telegram login method to the current account',
+  description:
+    'Attaches a provider identity to the logged-in account (auth_tz.md §10). Supply an OAuth authorization `code` (Google/GitHub) or a confirmed Telegram login `token`. Idempotent when the identity is already linked to this account; rejected (409) when it already belongs to a different user.',
+  security: [{ bearerAuth: [] }],
+  params: {
+    type: 'object',
+    required: ['provider'],
+    properties: {
+      provider: { type: 'string', enum: ['google', 'github', 'telegram'] },
+    },
+  },
+  body: {
+    type: 'object',
+    properties: {
+      code: { type: 'string' },
+      token: { type: 'string' },
+    },
+  },
+  response: {
+    200: identityShape,
+  },
+};
+
+export const unlinkIdentityRouteSchema: FastifySchema = {
+  tags: ['Auth'],
+  summary: 'Unlink a login method from the current account',
+  description:
+    'Removes the account’s identity for the given provider (auth_tz.md §10). Guarded: the last remaining login method cannot be removed (would lock the user out).',
+  security: [{ bearerAuth: [] }],
+  params: {
+    type: 'object',
+    required: ['provider'],
+    properties: {
+      provider: { type: 'string', enum: ['email', 'google', 'github', 'telegram'] },
+    },
+  },
+  response: {
+    204: { type: 'null', description: 'Unlinked' },
   },
 };
 
