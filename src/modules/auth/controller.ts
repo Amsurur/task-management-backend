@@ -1,6 +1,7 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import * as authService from './service.js';
 import { buildGoogleAuthUrl, exchangeGoogleCode } from './google.service.js';
+import { buildGithubAuthUrl, exchangeGithubCode } from './github.service.js';
 import { config } from '../../config/index.js';
 import { AppError } from '../../lib/errors.js';
 import {
@@ -22,6 +23,7 @@ import {
   EmailSignupBodySchema,
   EmailVerifyBodySchema,
   GoogleCallbackQuerySchema,
+  GithubCallbackQuerySchema,
 } from './schema.js';
 
 /** Frontend URL to bounce the browser to after a successful OAuth login. */
@@ -125,6 +127,65 @@ export async function googleCallbackHandler(
   } catch (err) {
     request.log.error({ err }, 'Google OAuth callback failed');
     reply.redirect(frontendErrorUrl('google_login_failed'));
+    return;
+  }
+
+  setRefreshCookie(reply, result.refresh_token);
+  reply.redirect(frontendSuccessUrl(result.access_token));
+}
+
+// ─── GitHub OAuth (auth_tz.md §4) ───────────────────────────────────────────────
+
+export async function githubRedirectHandler(
+  _request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const state = createState();
+  const url = buildGithubAuthUrl(state);
+  setStateCookie(reply, state);
+  reply.redirect(url); // 302 by default
+}
+
+export async function githubCallbackHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const query = GithubCallbackQuerySchema.parse(request.query ?? {});
+
+  // The state cookie is single-use regardless of outcome — clear it once we've read it.
+  clearStateCookie(reply);
+
+  // User declined authorization (or GitHub reported an error) — bounce back cleanly.
+  if (query.error) {
+    reply.redirect(frontendErrorUrl(query.error));
+    return;
+  }
+
+  // CSRF: `state` must match the browser cookie AND be a fresh token we minted.
+  if (!verifyCallbackState(query.state, request.cookies)) {
+    reply.redirect(frontendErrorUrl('invalid_state'));
+    return;
+  }
+
+  if (!query.code) {
+    reply.redirect(frontendErrorUrl('missing_code'));
+    return;
+  }
+
+  let result: authService.AuthTokens;
+  try {
+    const profile = await exchangeGithubCode(query.code);
+    result = await authService.loginWithProvider(request.server.prisma, {
+      provider: 'github',
+      provider_user_id: profile.id,
+      email: profile.email,
+      email_verified: profile.email_verified,
+      display_name: profile.name,
+      avatar_url: profile.avatar_url,
+    });
+  } catch (err) {
+    request.log.error({ err }, 'GitHub OAuth callback failed');
+    reply.redirect(frontendErrorUrl('github_login_failed'));
     return;
   }
 

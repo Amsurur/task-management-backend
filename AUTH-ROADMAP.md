@@ -9,9 +9,9 @@
 
 ## Current Status
 
-- **Current Phase:** Phase A3 — GitHub OAuth (**0/4 done**)
-- **Last Session:** 2026-07-02 (**A2 complete**: Google OAuth — `google.service.ts` (`buildGoogleAuthUrl` + `exchangeGoogleCode`, claims read from the `id_token`); `oauth-state.ts` gains double-submit `setStateCookie`/`clearStateCookie`/`verifyCallbackState`; `service.loginWithProvider` (find-or-create + issue session, reuses `findOrCreateFromProvider`); `GET /auth/google` + `/auth/google/callback` handlers/schemas/routes; success → refresh cookie + 302 to `FRONTEND_URL#access_token=`, failures → `#error=`. Test env gains `GOOGLE_*` (tests/setup.ts). Verified: build green, ESLint clean, Prettier clean on touched files, new `google-oauth` tests 4/4, auth 10/10 + email-auth 5/5 + invites 17/17 (no regressions). Note: remote-DB latency needs a raised vitest `--testTimeout` (e.g. 30000) for the argon2-heavy email suite, not just `--hookTimeout`.)
-- **Next Task:** Phase A3 → `GET /auth/github` — redirect with `state`, scope `read:user user:email` (reuse `oauth-state.ts` state-cookie helpers + `service.loginWithProvider`; mirror `google.service.ts`).
+- **Current Phase:** Phase A4 — Telegram deep-link login (**0/4 done**)
+- **Last Session:** 2026-07-02 (**A3 complete**: GitHub OAuth — `github.service.ts` (`buildGithubAuthUrl` + `exchangeGithubCode`; token exchange with `Accept: application/json`, then `GET /user` + `GET /user/emails` with a required `User-Agent`, `selectEmail` picks primary+verified); `GET /auth/github` + `/auth/github/callback` handlers/schemas/routes mirror Google; reuses `oauth-state.ts` helpers + `service.loginWithProvider` (find-or-create + auto-merge by verified email); success → refresh cookie + 302 to `FRONTEND_URL#access_token=`, failures → `#error=`. Test env gains `GITHUB_*` (tests/setup.ts). Verified: build green, ESLint clean, Prettier clean on touched files, new `github-oauth` tests 4/4, auth 10/10 + google-oauth 4/4 + email-auth 5/5 + invites 17/17 (36/36, no regressions).)
+- **Next Task:** Phase A4 → `POST /auth/telegram/init` — create a `TelegramLoginToken` (`pending`) bound to the browser session; return the `https://t.me/<bot>?start=<token>` deep-link (env `TELEGRAM_BOT_TOKEN`/`TELEGRAM_BOT_USERNAME` already present; token model from A0).
 - **Env notes:** DB reachable only with `?sslmode=require&connect_timeout=30` appended to `DATABASE_URL` (Render free tier: high latency + idle spin-down). Heavier integration suites need a raised vitest `hookTimeout` here (default 10s is too short for the remote-DB seed hooks — e.g. `--hookTimeout 120000`); the auth suite passes at the default.
 
 ---
@@ -69,10 +69,10 @@ Locked from `auth_tz.md` §9 and §1. Do not re-litigate during the build.
 
 ## Phase A3 — GitHub OAuth
 
-- [ ] `GET /auth/github` — redirect with `state`, scope `read:user user:email`
-- [ ] `GET /auth/github/callback` — verify `state`, exchange `code` for `access_token`, `GET /user` + `GET /user/emails` (primary + verified)
-- [ ] Same find-or-create + auto-merge-by-verified-email logic as Google; issue session
-- [ ] `github` identity row persisted
+- [x] `GET /auth/github` — redirect with `state`, scope `read:user user:email` — `githubRedirectHandler` mints `createState()`, stores it double-submit via `setStateCookie`, 302s to `github.com/login/oauth/authorize` (scope `read:user user:email`, `allow_signup=true`); URL built by `github.service.ts` `buildGithubAuthUrl`
+- [x] `GET /auth/github/callback` — verify `state`, exchange `code` for `access_token`, `GET /user` + `GET /user/emails` (primary + verified) — `githubCallbackHandler` clears the state cookie, checks `verifyCallbackState`, then `exchangeGithubCode` POSTs the token endpoint (`Accept: application/json`) and calls the API twice with a `User-Agent`; `selectEmail` picks the primary+verified address (falls back to any verified, else primary marked unverified). `error`/CSRF/exchange failures redirect to the frontend with `#error=`
+- [x] Same find-or-create + auto-merge-by-verified-email logic as Google; issue session — via `service.loginWithProvider` reusing `findOrCreateFromProvider`; on success sets the refresh cookie and 302s to `FRONTEND_URL#access_token=`
+- [x] `github` identity row persisted — handled by `findOrCreateFromProvider` (create + auto-merge paths both write `provider_email`); asserted by the happy-path test
 
 ## Phase A4 — Telegram deep-link login
 

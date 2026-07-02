@@ -53,6 +53,14 @@ export const GoogleCallbackQuerySchema = z.object({
   error: z.string().min(1).optional(),
 });
 
+// GitHub OAuth callback query params — same shape as Google (`code`+`state` on
+// success, `error` on denial).
+export const GithubCallbackQuerySchema = z.object({
+  code: z.string().min(1).optional(),
+  state: z.string().min(1).optional(),
+  error: z.string().min(1).optional(),
+});
+
 export type RegisterBody = z.infer<typeof RegisterBodySchema>;
 export type LoginBody = z.infer<typeof LoginBodySchema>;
 export type RefreshBody = z.infer<typeof RefreshBodySchema>;
@@ -60,6 +68,7 @@ export type UpdateMeBody = z.infer<typeof UpdateMeBodySchema>;
 export type EmailSignupBody = z.infer<typeof EmailSignupBodySchema>;
 export type EmailVerifyBody = z.infer<typeof EmailVerifyBodySchema>;
 export type GoogleCallbackQuery = z.infer<typeof GoogleCallbackQuerySchema>;
+export type GithubCallbackQuery = z.infer<typeof GithubCallbackQuerySchema>;
 
 // ─── Fastify route schemas (for OpenAPI + request validation) ─────────────────
 
@@ -199,6 +208,34 @@ export const googleCallbackRouteSchema: FastifySchema = {
   summary: 'Google OAuth callback — verifies state, exchanges the code, issues a session',
   description:
     'Verifies the `state` against the browser cookie (CSRF), exchanges the authorization code for the Google profile, find-or-creates the account (auto-merging by verified email), sets the refresh cookie and redirects to the frontend with an access token in the URL fragment. Failures redirect to the frontend with an `error` fragment.',
+  querystring: {
+    type: 'object',
+    properties: {
+      code: { type: 'string' },
+      state: { type: 'string' },
+      error: { type: 'string' },
+    },
+  },
+  response: {
+    302: { type: 'null', description: 'Redirect to the frontend (or an error page)' },
+  },
+};
+
+export const githubRedirectRouteSchema: FastifySchema = {
+  tags: ['Auth'],
+  summary: 'Begin GitHub OAuth — redirects to the GitHub authorize screen',
+  description:
+    'Mints a CSRF `state`, stores it in a short-lived httpOnly cookie, and 302-redirects the browser to GitHub (scope `read:user user:email`).',
+  response: {
+    302: { type: 'null', description: 'Redirect to GitHub' },
+  },
+};
+
+export const githubCallbackRouteSchema: FastifySchema = {
+  tags: ['Auth'],
+  summary: 'GitHub OAuth callback — verifies state, exchanges the code, issues a session',
+  description:
+    'Verifies the `state` against the browser cookie (CSRF), exchanges the authorization code for an access token, reads the profile (`GET /user`) and primary verified email (`GET /user/emails`), find-or-creates the account (auto-merging by verified email), sets the refresh cookie and redirects to the frontend with an access token in the URL fragment. Failures redirect to the frontend with an `error` fragment.',
   querystring: {
     type: 'object',
     properties: {

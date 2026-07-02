@@ -12,6 +12,8 @@ import {
   emailLoginRouteSchema,
   googleRedirectRouteSchema,
   googleCallbackRouteSchema,
+  githubRedirectRouteSchema,
+  githubCallbackRouteSchema,
 } from './schema.js';
 import {
   registerHandler,
@@ -24,6 +26,8 @@ import {
   emailVerifyHandler,
   googleRedirectHandler,
   googleCallbackHandler,
+  githubRedirectHandler,
+  githubCallbackHandler,
 } from './controller.js';
 
 export async function authRoutes(app: FastifyInstance): Promise<void> {
@@ -36,6 +40,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   // Google OAuth 2.0 (auth_tz.md §3).
   app.get('/google', { schema: googleRedirectRouteSchema }, googleRedirectHandler);
   app.get('/google/callback', { schema: googleCallbackRouteSchema }, googleCallbackHandler);
+  // GitHub OAuth 2.0 (auth_tz.md §4).
+  app.get('/github', { schema: githubRedirectRouteSchema }, githubRedirectHandler);
+  app.get('/github/callback', { schema: githubCallbackRouteSchema }, githubCallbackHandler);
   app.post('/refresh', { schema: refreshRouteSchema }, refreshHandler);
   app.post('/logout', { schema: logoutRouteSchema }, logoutHandler);
   app.get('/me', { schema: getMeRouteSchema, preHandler: [authenticate] }, getMeHandler);
