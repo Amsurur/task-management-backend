@@ -61,6 +61,41 @@ export const GithubCallbackQuerySchema = z.object({
   error: z.string().min(1).optional(),
 });
 
+// Telegram deep-link login (auth_tz.md §7).
+// The status poll carries the login token as a query param.
+export const TelegramStatusQuerySchema = z.object({
+  token: z.string().min(1),
+});
+
+// A Telegram webhook Update — only the fields the bot handler consumes are typed;
+// `passthrough` keeps the rest so validation never rejects a well-formed update.
+const TelegramUserSchema = z.object({
+  id: z.number(),
+  first_name: z.string().optional(),
+  username: z.string().optional(),
+});
+export const TelegramUpdateSchema = z
+  .object({
+    message: z
+      .object({
+        chat: z.object({ id: z.number() }),
+        from: TelegramUserSchema.optional(),
+        text: z.string().optional(),
+      })
+      .optional(),
+    callback_query: z
+      .object({
+        id: z.string(),
+        from: TelegramUserSchema,
+        data: z.string().optional(),
+        message: z
+          .object({ chat: z.object({ id: z.number() }), message_id: z.number() })
+          .optional(),
+      })
+      .optional(),
+  })
+  .passthrough();
+
 export type RegisterBody = z.infer<typeof RegisterBodySchema>;
 export type LoginBody = z.infer<typeof LoginBodySchema>;
 export type RefreshBody = z.infer<typeof RefreshBodySchema>;
@@ -69,6 +104,7 @@ export type EmailSignupBody = z.infer<typeof EmailSignupBodySchema>;
 export type EmailVerifyBody = z.infer<typeof EmailVerifyBodySchema>;
 export type GoogleCallbackQuery = z.infer<typeof GoogleCallbackQuerySchema>;
 export type GithubCallbackQuery = z.infer<typeof GithubCallbackQuerySchema>;
+export type TelegramStatusQuery = z.infer<typeof TelegramStatusQuerySchema>;
 
 // ─── Fastify route schemas (for OpenAPI + request validation) ─────────────────
 
@@ -246,6 +282,61 @@ export const githubCallbackRouteSchema: FastifySchema = {
   },
   response: {
     302: { type: 'null', description: 'Redirect to the frontend (or an error page)' },
+  },
+};
+
+// ─── Telegram deep-link login (auth_tz.md §7) ─────────────────────────────────
+
+export const telegramInitRouteSchema: FastifySchema = {
+  tags: ['Auth'],
+  summary: 'Start a Telegram login — returns a t.me deep-link and a polling token',
+  description:
+    'Creates a short-lived (10 min) `pending` login token bound to the browser via an httpOnly `tg_session` cookie, and returns the `https://t.me/<bot>?start=<token>` deep-link. The client opens the link, then polls `GET /auth/telegram/status?token=` until the user confirms in the bot.',
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        deep_link: { type: 'string' },
+        token: { type: 'string' },
+        expires_at: { type: 'string', format: 'date-time' },
+      },
+    },
+  },
+};
+
+export const telegramWebhookRouteSchema: FastifySchema = {
+  tags: ['Auth'],
+  summary: 'Telegram bot webhook — receives bot updates (Telegram calls this)',
+  description:
+    'Endpoint Telegram posts bot updates to. A `/start <token>` message gets a confirm inline-button; tapping it confirms the login token and attaches the tapper’s telegram_id. Protected by the `X-Telegram-Bot-Api-Secret-Token` header when `TELEGRAM_WEBHOOK_SECRET` is configured. Not called by the frontend.',
+  body: { type: 'object', additionalProperties: true },
+  response: {
+    200: { type: 'object', properties: { ok: { type: 'boolean' } } },
+  },
+};
+
+export const telegramStatusRouteSchema: FastifySchema = {
+  tags: ['Auth'],
+  summary: 'Poll a Telegram login token — returns pending, or a session once confirmed',
+  description:
+    'Polled by the site (~every 2s). Enforces the `tg_session` cookie binding and the 10-minute TTL. Returns `{ status: "pending" }` until the user confirms in the bot, then consumes the token (one-time), find-or-creates the account by telegram_id, sets the refresh cookie and returns `{ status: "authenticated", access_token, refresh_token, user }`. Also reports `expired` / `used`.',
+  querystring: {
+    type: 'object',
+    required: ['token'],
+    properties: {
+      token: { type: 'string' },
+    },
+  },
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: ['pending', 'expired', 'used', 'authenticated'] },
+        access_token: { type: 'string' },
+        refresh_token: { type: 'string' },
+        user: userShape,
+      },
+    },
   },
 };
 

@@ -8,6 +8,15 @@ import { sendOtpEmail } from '../../lib/email.js';
 import { acceptInviteAfterRegister } from '../invites/service.js';
 import { issueOtp, verifyOtp } from './otp.service.js';
 import { findOrCreateFromProvider, type ProviderProfile } from './identity.service.js';
+import { initLoginToken, confirmLoginToken, consumeLoginToken } from './telegram-login.service.js';
+import {
+  buildTelegramDeepLink,
+  sendConfirmPrompt,
+  sendBotMessage,
+  answerCallbackQuery,
+  CONFIRM_CALLBACK_PREFIX,
+  type TelegramUpdate,
+} from './telegram.service.js';
 import type {
   RegisterBody,
   LoginBody,
@@ -182,6 +191,120 @@ export async function loginWithProvider(
 ): Promise<AuthTokens> {
   const user = await findOrCreateFromProvider(prisma, profile);
   return issueTokenPair(prisma, user);
+}
+
+// ─── Telegram deep-link login (auth_tz.md §7) ───────────────────────────────────
+
+export interface TelegramInitResult {
+  deep_link: string;
+  token: string;
+  expires_at: Date;
+}
+
+/**
+ * Start a Telegram handshake: mint a `pending` login token bound to the initiating
+ * browser session, and return the `t.me` deep-link plus the token (the site polls
+ * `telegramStatus` with it). The caller stores `sessionId` in the browser.
+ */
+export async function telegramInit(
+  prisma: PrismaClient,
+  sessionId: string,
+): Promise<TelegramInitResult> {
+  const { token, expires_at } = await initLoginToken(prisma, sessionId);
+  return { deep_link: buildTelegramDeepLink(token), token, expires_at };
+}
+
+/**
+ * Process a Telegram webhook update (auth_tz.md §7 steps 3–4). A `/start <token>`
+ * message gets a confirm inline-button; tapping it sends a `callback_query` whose
+ * `confirm:<token>` data confirms the token and attaches the tapper's `telegram_id`.
+ * Every branch answers the user so the bot never goes silent; failures are surfaced
+ * as friendly messages rather than thrown (Telegram just needs a 200).
+ */
+export async function handleTelegramUpdate(
+  prisma: PrismaClient,
+  update: TelegramUpdate,
+): Promise<void> {
+  // Button tap → confirm the login.
+  if (update.callback_query) {
+    const cq = update.callback_query;
+    const data = cq.data ?? '';
+    if (!data.startsWith(CONFIRM_CALLBACK_PREFIX)) {
+      await answerCallbackQuery(cq.id, 'Unknown action.');
+      return;
+    }
+    const token = data.slice(CONFIRM_CALLBACK_PREFIX.length);
+    try {
+      await confirmLoginToken(prisma, token, String(cq.from.id));
+      await answerCallbackQuery(cq.id, 'Signed in! Head back to the website.');
+    } catch (err) {
+      await answerCallbackQuery(
+        cq.id,
+        err instanceof AppError ? err.message : 'Could not confirm sign-in.',
+      );
+    }
+    return;
+  }
+
+  // `/start <token>` → send the confirm button (only for a live pending token).
+  const message = update.message;
+  if (message?.text) {
+    const chatId = message.chat.id;
+    const token = parseStartToken(message.text);
+    if (!token) {
+      await sendBotMessage(
+        chatId,
+        'Open this bot from the website’s “Sign in with Telegram” button to log in.',
+      );
+      return;
+    }
+
+    const row = await prisma.telegramLoginToken.findUnique({ where: { token } });
+    if (!row || row.status !== 'pending' || row.expires_at < new Date()) {
+      await sendBotMessage(
+        chatId,
+        'This sign-in link is invalid or has expired. Please start again from the website.',
+      );
+      return;
+    }
+
+    await sendConfirmPrompt(chatId, token);
+  }
+}
+
+export type TelegramStatusResult =
+  | { status: 'pending' }
+  | { status: 'expired' }
+  | { status: 'used' }
+  | ({ status: 'authenticated' } & AuthTokens);
+
+/**
+ * Poll a Telegram login token (auth_tz.md §7 step 6). On the first `confirmed` read
+ * the token is consumed (one-time) and we find-or-create the account by `telegram_id`
+ * (no email) and issue a session. `pending`/`expired`/`used` are reported as-is.
+ * Session binding + TTL are enforced in {@link consumeLoginToken}.
+ */
+export async function telegramStatus(
+  prisma: PrismaClient,
+  token: string,
+  sessionId: string | undefined,
+): Promise<TelegramStatusResult> {
+  const state = await consumeLoginToken(prisma, token, sessionId);
+  if (state.status !== 'confirmed') return state;
+
+  const tokens = await loginWithProvider(prisma, {
+    provider: 'telegram',
+    provider_user_id: state.telegram_id,
+  });
+  return { status: 'authenticated', ...tokens };
+}
+
+/** Extract the `start` payload from a `/start <token>` command, else null. */
+function parseStartToken(text: string): string | null {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('/start')) return null;
+  const parts = trimmed.split(/\s+/);
+  return parts[1] ?? null;
 }
 
 export async function refresh(prisma: PrismaClient, rawToken: string): Promise<AuthTokens> {

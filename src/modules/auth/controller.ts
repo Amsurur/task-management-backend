@@ -15,6 +15,8 @@ import {
   clearStateCookie,
   verifyCallbackState,
 } from '../../lib/oauth-state.js';
+import { setTelegramSessionCookie, readTelegramSessionCookie } from '../../lib/telegram-session.js';
+import { generateSessionId } from './telegram-login.service.js';
 import {
   RegisterBodySchema,
   LoginBodySchema,
@@ -24,6 +26,8 @@ import {
   EmailVerifyBodySchema,
   GoogleCallbackQuerySchema,
   GithubCallbackQuerySchema,
+  TelegramStatusQuerySchema,
+  TelegramUpdateSchema,
 } from './schema.js';
 
 /** Frontend URL to bounce the browser to after a successful OAuth login. */
@@ -191,6 +195,51 @@ export async function githubCallbackHandler(
 
   setRefreshCookie(reply, result.refresh_token);
   reply.redirect(frontendSuccessUrl(result.access_token));
+}
+
+// ─── Telegram deep-link login (auth_tz.md §7) ───────────────────────────────────
+
+export async function telegramInitHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  // Bind this handshake to the browser: mint a session id, store it in an httpOnly
+  // cookie, and stamp it on the token so only this browser can consume the login.
+  const sessionId = generateSessionId();
+  const result = await authService.telegramInit(request.server.prisma, sessionId);
+  setTelegramSessionCookie(reply, sessionId);
+  reply.send(result);
+}
+
+export async function telegramWebhookHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  // When a webhook secret is configured, only requests carrying the matching header
+  // (registered with Telegram's setWebhook) are accepted.
+  const expected = config.TELEGRAM_WEBHOOK_SECRET;
+  if (expected) {
+    const provided = request.headers['x-telegram-bot-api-secret-token'];
+    if (provided !== expected) throw AppError.unauthorized('Invalid webhook secret');
+  }
+
+  const update = TelegramUpdateSchema.parse(request.body ?? {});
+  await authService.handleTelegramUpdate(request.server.prisma, update);
+  // Telegram only needs a 200; any per-update failure is reported to the user in-chat.
+  reply.send({ ok: true });
+}
+
+export async function telegramStatusHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const { token } = TelegramStatusQuerySchema.parse(request.query ?? {});
+  const sessionId = readTelegramSessionCookie(request.cookies);
+  const result = await authService.telegramStatus(request.server.prisma, token, sessionId);
+  if (result.status === 'authenticated') {
+    setRefreshCookie(reply, result.refresh_token);
+  }
+  reply.send(result);
 }
 
 export async function refreshHandler(request: FastifyRequest, reply: FastifyReply): Promise<void> {

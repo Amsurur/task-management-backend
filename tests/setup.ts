@@ -19,3 +19,7 @@ process.env.GOOGLE_CALLBACK_URL ??= 'http://localhost:3000/api/v1/auth/google/ca
 process.env.GITHUB_CLIENT_ID ??= 'test-github-client-id';
 process.env.GITHUB_CLIENT_SECRET ??= 'test-github-client-secret';
 process.env.GITHUB_CALLBACK_URL ??= 'http://localhost:3000/api/v1/auth/github/callback';
+// Telegram bot so the deep-link flow is "configured" under test. The Bot API calls
+// are mocked (global fetch); these are never sent anywhere real.
+process.env.TELEGRAM_BOT_TOKEN ??= '123456:test-telegram-bot-token';
+process.env.TELEGRAM_BOT_USERNAME ??= 'test_task_bot';

@@ -83,6 +83,12 @@ export const envSchema = z
     // --- Telegram bot --- (deep-link login; auth_tz.md §7)
     TELEGRAM_BOT_TOKEN: z.string().min(1).optional(),
     TELEGRAM_BOT_USERNAME: z.string().min(1).optional(),
+    /**
+     * Shared secret registered with Telegram's `setWebhook` (`secret_token`). When
+     * set, the webhook route requires a matching `X-Telegram-Bot-Api-Secret-Token`
+     * header so only Telegram can post updates. Optional in dev/test.
+     */
+    TELEGRAM_WEBHOOK_SECRET: z.string().min(1).optional(),
 
     // --- CORS --- (comma-separated origins, or `*`; configured per environment)
     CORS_ORIGIN: z.string().min(1).default('*'),
