@@ -1,14 +1,4 @@
-// Fastify application factory.
-//
-// `buildApp` constructs and configures the Fastify instance but does NOT call
-// `listen` — that is the bootstrap's job (`server.ts`). Keeping construction
-// separate from listening lets tests build an app and drive it via injection
-// without binding a port.
-//
-// Plugins, hooks and feature modules register here. For now this is the bare
-// skeleton (logging + a single liveness route); base plugins (error handler,
-// swagger, etc.) and the `/api/v1` module tree land in subsequent Phase 0/1 tasks.
-
+import { createRequire } from 'module';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { LoggerOptions } from 'pino';
 import { config, isDev, isProd } from './config/index.js';
@@ -43,16 +33,9 @@ import { aiRoutes } from './modules/ai/routes.js';
 import { userRoutes } from './modules/users/routes.js';
 
 export interface BuildAppOptions {
-  /** Pino logger options, or `false`/`true` to disable/enable the default logger. */
   logger?: LoggerOptions | boolean;
 }
 
-/**
- * Whether `pino-pretty` is resolvable in the current install. It is a
- * devDependency, so it is present in development but pruned in production
- * (`npm install --omit=dev`). Guarding on this prevents a hard crash if the
- * pretty transport is requested where the module is absent.
- */
 function isPinoPrettyAvailable(): boolean {
   try {
     createRequire(import.meta.url).resolve('pino-pretty');
@@ -62,16 +45,6 @@ function isPinoPrettyAvailable(): boolean {
   }
 }
 
-/**
- * Sensible default logger config derived from validated config. Pretty-prints in
- * development (via pino-pretty, a dev dependency) and emits structured JSON
- * everywhere else. Request IDs are enabled by Fastify out of the box (`reqId` on
- * every log line).
- */
-function isPinoPrettyAvailable(): boolean {
-  return false;
-}
-
 function defaultLogger(): LoggerOptions | boolean {
   if (isProd) {
     return true;
@@ -79,11 +52,6 @@ function defaultLogger(): LoggerOptions | boolean {
 
   const level = config.LOG_LEVEL ?? (isDev ? 'debug' : 'info');
 
-  // Pretty-print only in development AND only when pino-pretty is actually
-  // installed. In production it is omitted (devDependency, pruned by
-  // `npm install --omit=dev`); guarding here prevents a hard crash if the
-  // environment is misconfigured (e.g. NODE_ENV left at its development
-  // default on a production host).
   if (isDev && isPinoPrettyAvailable()) {
     return {
       level,
@@ -97,37 +65,21 @@ function defaultLogger(): LoggerOptions | boolean {
   return { level };
 }
 
-/**
- * Build a fully-wired (but not-yet-listening) Fastify instance.
- */
 export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({
     logger: opts.logger ?? defaultLogger(),
-    // Trust the reverse proxy in front of us for client IPs / protocol.
     trustProxy: true,
-    // Reject unknown content types early rather than silently.
     disableRequestLogging: false,
   });
 
-  // --- Plugins ---------------------------------------------------------------
-  // Order matters: the error handler is installed first so any later failure is
-  // rendered as the standard envelope; swagger registers before routes so it can
-  // capture their schemas; prisma decorates `app.prisma`. Security plugins
-  // (helmet, cors, rate-limit) are added in the Phase 4 hardening pass.
   await app.register(errorHandlerPlugin);
   await app.register(swaggerPlugin);
   await app.register(prismaPlugin);
   await app.register(storagePlugin);
   await app.register(authPlugin);
   await app.register(workspacePlugin);
-  // WebSocket support (chat real-time). Must be registered before any route that
-  // opts in via `{ websocket: true }`.
   await app.register(websocket);
 
-  // --- Routes ----------------------------------------------------------------
-  // Liveness/readiness probe. Liveness always returns ok if the process is up;
-  // readiness additionally pings the database so orchestrators don't route
-  // traffic to an instance that can't reach its DB.
   app.get('/health', async (_request, reply) => {
     try {
       await app.prisma.$queryRaw`SELECT 1`;
@@ -138,7 +90,6 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     }
   });
 
-  // Feature modules under /api/v1
   await app.register(authRoutes, { prefix: '/api/v1/auth' });
   await app.register(workspaceRoutes, { prefix: '/api/v1/workspaces' });
   await app.register(userRoutes, { prefix: '/api/v1/users' });
@@ -177,13 +128,11 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     prefix: '/api/v1/workspaces/:workspaceSlug/notifications',
   });
 
-  // Invites — public magic-link accept + workspace-scoped management.
   await app.register(publicInviteRoutes, { prefix: '/api/v1/invites' });
   await app.register(workspaceInviteRoutes, {
     prefix: '/api/v1/workspaces/:workspaceSlug/invites',
   });
 
-  // Chat — contacts, conversations, group creation, and the real-time socket.
   await app.register(contactRoutes, { prefix: '/api/v1/contacts' });
   await app.register(conversationRoutes, { prefix: '/api/v1/conversations' });
   await app.register(workspaceConversationRoutes, {
@@ -191,7 +140,6 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   });
   await app.register(chatWsRoutes, { prefix: '/api/v1/ws' });
 
-  // AI assistant — answers questions and performs actions as the authenticated user.
   await app.register(aiRoutes, { prefix: '/api/v1/ai' });
 
   return app;
