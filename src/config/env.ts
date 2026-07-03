@@ -23,6 +23,9 @@ export const envSchema = z
     JWT_REFRESH_TTL: duration.default('7d'),
     CORS_ORIGIN: z.string().min(1).default('*'),
     PUBLIC_BASE_URL: z.string().url().default('http://localhost:3000'),
+    // Base URL of the frontend SPA — used to build invite links that open the
+    // app (e.g. `${FRONTEND_URL}/invite/<token>`), not a backend page.
+    FRONTEND_URL: z.string().url().default('https://task-management-peach-phi.vercel.app'),
     STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
     LOCAL_STORAGE_DIR: z.string().min(1).default('./uploads'),
     STORAGE_PRESIGN_TTL: z.coerce.number().int().min(30).max(86400).default(900),

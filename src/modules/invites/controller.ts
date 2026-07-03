@@ -46,6 +46,30 @@ export async function acceptInviteHandler(
   reply.code(status).type('text/html; charset=utf-8').send(html);
 }
 
+// Public JSON: the frontend /invite/:token page fetches invite details to render.
+export async function getInviteInfoHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const { token } = request.params as { token: string };
+  const info = await inviteService.getInviteByToken(request.server.prisma, token);
+  reply.send(info);
+}
+
+// Authenticated JSON: the frontend calls this after the invitee logs in/registers.
+export async function acceptInvitePostHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const { token } = request.params as { token: string };
+  const result = await inviteService.acceptInviteForUser(
+    request.server.prisma,
+    request.userId,
+    token,
+  );
+  reply.send({ workspace_slug: result.workspaceSlug, workspace_name: result.workspaceName });
+}
+
 function renderAcceptPage(result: AcceptResult): { status: number; html: string } {
   let status = 200;
   let heading: string;

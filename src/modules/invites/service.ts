@@ -25,10 +25,94 @@ function generateToken(): string {
   return randomBytes(32).toString('base64url');
 }
 
-/** Build the absolute magic-link URL the invitee receives in their email. */
-function buildAcceptUrl(token: string): string {
-  // IMPORTANT: the link must include the /api/v1 prefix, otherwise it 404s.
-  return `${config.PUBLIC_BASE_URL}/api/v1/invites/${token}/accept`;
+/**
+ * Build the invite link the recipient receives by email. It points at the
+ * frontend SPA (`/invite/<token>`), which shows the invitation and lets the
+ * person register or accept — landing them in the actual app, not a backend page.
+ */
+export function buildAcceptUrl(token: string): string {
+  return `${config.FRONTEND_URL.replace(/\/$/, '')}/invite/${token}`;
+}
+
+/** Invite details the frontend renders on its `/invite/:token` page. */
+export interface InviteInfo {
+  status: 'pending' | 'accepted' | 'expired' | 'revoked' | 'invalid';
+  email?: string;
+  role?: string;
+  expired?: boolean;
+  workspace?: { name: string; slug: string };
+  inviter_name?: string;
+}
+
+/** Look up an invite by its opaque token (public — the token is the credential). */
+export async function getInviteByToken(prisma: PrismaClient, token: string): Promise<InviteInfo> {
+  const invite = await prisma.workspaceInvite.findUnique({
+    where: { token },
+    include: { workspace: true, invited_by: { select: { display_name: true } } },
+  });
+  if (!invite) return { status: 'invalid' };
+
+  const expired = invite.expires_at < new Date();
+  const status = expired && invite.status === 'pending' ? 'expired' : invite.status;
+  return {
+    status,
+    email: invite.email,
+    role: invite.role,
+    expired,
+    workspace: { name: invite.workspace.name, slug: invite.workspace.slug },
+    inviter_name: invite.invited_by.display_name,
+  };
+}
+
+/**
+ * Accept an invite as the currently-authenticated user (used by the frontend
+ * after login/registration). The user's email must match the invite's email, so
+ * you can't hijack an invitation sent to someone else. Idempotent.
+ */
+export async function acceptInviteForUser(
+  prisma: PrismaClient,
+  userId: string,
+  token: string,
+): Promise<{ workspaceSlug: string; workspaceName: string }> {
+  const invite = await prisma.workspaceInvite.findUnique({
+    where: { token },
+    include: { workspace: true },
+  });
+  if (!invite) throw AppError.notFound('Invite not found');
+  if (invite.status === 'revoked') throw AppError.gone('This invitation has been revoked');
+  if (invite.status !== 'accepted' && invite.expires_at < new Date()) {
+    if (invite.status === 'pending') {
+      await prisma.workspaceInvite.update({ where: { id: invite.id }, data: { status: 'expired' } });
+    }
+    throw AppError.gone('This invitation has expired');
+  }
+
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+  if (user.email.toLowerCase() !== invite.email.toLowerCase()) {
+    throw AppError.forbidden('This invitation was sent to a different email address');
+  }
+
+  const existing = await prisma.workspaceMember.findUnique({
+    where: { workspace_id_user_id: { workspace_id: invite.workspace_id, user_id: userId } },
+  });
+  if (!existing) {
+    await prisma.$transaction([
+      prisma.workspaceMember.create({
+        data: { workspace_id: invite.workspace_id, user_id: userId, role: invite.role },
+      }),
+      prisma.workspaceInvite.update({
+        where: { id: invite.id },
+        data: { status: 'accepted', accepted_at: new Date() },
+      }),
+    ]);
+  } else if (invite.status !== 'accepted') {
+    await prisma.workspaceInvite.update({
+      where: { id: invite.id },
+      data: { status: 'accepted', accepted_at: new Date() },
+    });
+  }
+
+  return { workspaceSlug: invite.workspace.slug, workspaceName: invite.workspace.name };
 }
 
 export async function createInvite(

@@ -10,9 +10,10 @@ export const RegisterBodySchema = z.object({
   // Clients (e.g. HTML forms) often send an empty string when the user leaves
   // the invite field blank. Treat "" / whitespace as "no invite" so a normal
   // first-time signup succeeds; a non-empty value must still be a valid UUID.
+  // Opaque invite token (base64url, not a UUID). "" from a form means "no invite".
   invite_token: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().uuid().optional(),
+    z.string().min(10).max(200).optional(),
   ),
 });
 

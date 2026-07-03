@@ -6,12 +6,16 @@ import {
   listInvitesSchema,
   revokeInviteSchema,
   acceptInviteSchema,
+  getInviteInfoSchema,
+  acceptInvitePostSchema,
 } from './schema.js';
 import {
   createInviteHandler,
   listInvitesHandler,
   revokeInviteHandler,
   acceptInviteHandler,
+  getInviteInfoHandler,
+  acceptInvitePostHandler,
 } from './controller.js';
 
 /**
@@ -31,5 +35,14 @@ export async function workspaceInviteRoutes(app: FastifyInstance): Promise<void>
  * credential. Registered under `/api/v1/invites`.
  */
 export async function publicInviteRoutes(app: FastifyInstance): Promise<void> {
+  // Frontend fetches invite details to render its /invite/:token page.
+  app.get('/:token', { schema: getInviteInfoSchema }, getInviteInfoHandler);
+  // Legacy browser magic-link (opens an HTML confirmation page directly).
   app.get('/:token/accept', { schema: acceptInviteSchema }, acceptInviteHandler);
+  // Frontend calls this (with the user's token) after login/registration to join.
+  app.post(
+    '/:token/accept',
+    { schema: acceptInvitePostSchema, preHandler: [authenticate] },
+    acceptInvitePostHandler,
+  );
 }

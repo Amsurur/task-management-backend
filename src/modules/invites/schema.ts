@@ -73,3 +73,41 @@ export const acceptInviteSchema: FastifySchema = {
   summary: 'Accept a workspace invite via magic-link (public). Returns an HTML page.',
   params: { type: 'object', properties: { token: { type: 'string' } } },
 };
+
+export const getInviteInfoSchema: FastifySchema = {
+  tags: ['Invites'],
+  summary: 'Get invite details by token (public) — for the frontend /invite/:token page',
+  params: { type: 'object', properties: { token: { type: 'string' } } },
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: ['pending', 'accepted', 'expired', 'revoked', 'invalid'] },
+        email: { type: 'string' },
+        role: { type: 'string' },
+        expired: { type: 'boolean' },
+        inviter_name: { type: 'string' },
+        workspace: {
+          type: 'object',
+          properties: { name: { type: 'string' }, slug: { type: 'string' } },
+        },
+      },
+    },
+  },
+};
+
+export const acceptInvitePostSchema: FastifySchema = {
+  tags: ['Invites'],
+  summary: 'Accept an invite as the logged-in user (frontend calls this after login/register)',
+  security: [{ bearerAuth: [] }],
+  params: { type: 'object', properties: { token: { type: 'string' } } },
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        workspace_slug: { type: 'string' },
+        workspace_name: { type: 'string' },
+      },
+    },
+  },
+};
