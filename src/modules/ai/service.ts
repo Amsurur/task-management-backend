@@ -159,19 +159,16 @@ async function callGemini(apiKey: string, contents: GeminiContent[]): Promise<Ge
       if (r.ok) return r.content;
       lastMessage = `${model}: ${r.message}`;
 
-      if (r.status === 429) {
-        // One quick retry on this model, then fall through to the next model.
+      // Rate limit (429) or transient overload (500/503): one quick retry on this
+      // model, then fall through to the next model (its quota/capacity is separate).
+      if (r.status === 429 || r.status === 500 || r.status === 503) {
         if (attempt === 0) {
-          await sleep(Math.min(parseRetryDelayMs(r.message) ?? 400, 1500));
+          await sleep(Math.min(parseRetryDelayMs(r.message) ?? 600, 1500));
           continue;
         }
         break;
       }
-      if ((r.status === 500 || r.status === 503) && attempt === 0) {
-        await sleep(800);
-        continue;
-      }
-      // Non-retryable (bad request, auth, etc.) — surface immediately.
+      // Non-retryable (bad request, auth, unknown model, etc.) — surface immediately.
       throw new AppError(502, 'SERVICE_UNAVAILABLE', `Gemini request failed: ${r.message}`);
     }
   }
