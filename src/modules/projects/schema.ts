@@ -10,12 +10,14 @@ export const CreateProjectBodySchema = z.object({
     .regex(/^[A-Z0-9]+$/, 'Identifier must be uppercase letters and digits only'),
   description: z.string().max(500).optional(),
   lead_id: z.string().uuid().optional().nullable(),
+  visibility: z.enum(['private', 'public']).default('private'),
 });
 
 export const UpdateProjectBodySchema = z.object({
   name: z.string().min(1).max(100).optional(),
   description: z.string().max(500).optional().nullable(),
   lead_id: z.string().uuid().optional().nullable(),
+  visibility: z.enum(['private', 'public']).optional(),
   is_archived: z.boolean().optional(),
 });
 
@@ -39,6 +41,7 @@ const projectShape = {
     identifier: { type: 'string' },
     description: { type: 'string', nullable: true },
     lead_id: { type: 'string', nullable: true },
+    visibility: { type: 'string', enum: ['private', 'public'] },
     is_archived: { type: 'boolean' },
     created_at: { type: 'string', format: 'date-time' },
     updated_at: { type: 'string', format: 'date-time' },
@@ -95,6 +98,7 @@ export const createProjectSchema: FastifySchema = {
       identifier: { type: 'string', minLength: 1, maxLength: 10, pattern: '^[A-Z0-9]+$' },
       description: { type: 'string', maxLength: 500 },
       lead_id: { type: 'string', format: 'uuid', nullable: true },
+      visibility: { type: 'string', enum: ['private', 'public'] },
     },
   },
   response: { 201: projectShape },
@@ -119,6 +123,7 @@ export const updateProjectSchema: FastifySchema = {
       name: { type: 'string', minLength: 1, maxLength: 100 },
       description: { type: 'string', nullable: true },
       lead_id: { type: 'string', format: 'uuid', nullable: true },
+      visibility: { type: 'string', enum: ['private', 'public'] },
       is_archived: { type: 'boolean' },
     },
   },

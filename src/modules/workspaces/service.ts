@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import type { PrismaClient, Workspace, WorkspaceMember, WorkspaceInvite } from '@prisma/client';
 import { AppError } from '../../lib/errors.js';
 import { sendInviteEmail } from '../../lib/email.js';
@@ -182,23 +183,25 @@ export async function inviteMember(
   });
 
   const expiresAt = new Date(Date.now() + INVITE_TTL_DAYS * 24 * 60 * 60 * 1000);
+  const token = randomBytes(32).toString('base64url');
   const invite = await prisma.workspaceInvite.create({
     data: {
       workspace_id: workspaceId,
       invited_by_id: inviterId,
       email: body.email,
       role: body.role,
+      token,
       expires_at: expiresAt,
     },
   });
 
-  const inviteUrl = `${config.PUBLIC_BASE_URL}/invites/${invite.token}`;
+  const acceptUrl = `${config.PUBLIC_BASE_URL}/api/v1/invites/${token}/accept`;
   await sendInviteEmail({
     to: body.email,
     workspaceName: workspace.name,
     inviterName: inviter.display_name,
-    inviteUrl,
-    expiresAt,
+    acceptUrl,
+    role: body.role,
   });
 
   return invite;

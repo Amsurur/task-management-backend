@@ -1,0 +1,471 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum WorkspaceRole {
+  owner
+  admin
+  member
+  guest
+}
+
+enum ProjectRole {
+  admin
+  member
+  viewer
+}
+
+enum StateGroup {
+  backlog
+  unstarted
+  started
+  completed
+  cancelled
+}
+
+enum IssuePriority {
+  none
+  low
+  medium
+  high
+  urgent
+}
+
+enum ModuleStatus {
+  backlog
+  in_progress
+  paused
+  completed
+  cancelled
+}
+
+enum IssueLinkType {
+  blocks
+  blocked_by
+  relates_to
+  duplicates
+}
+
+// In-app notification kinds (TZ §5.18). Generated as a side effect of the
+// events that already write the activity trail.
+enum NotificationType {
+  issue_assigned
+  comment_added
+  mentioned
+}
+
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  password_hash String
+  display_name  String
+  avatar_url    String?
+  is_active     Boolean  @default(true)
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  refresh_tokens        RefreshToken[]
+  workspace_memberships WorkspaceMember[]
+  project_memberships   ProjectMember[]
+  owned_workspaces      Workspace[]       @relation("WorkspaceOwner")
+  led_projects          Project[]         @relation("ProjectLead")
+  led_modules           Module[]          @relation("ModuleLead")
+  created_issues        Issue[]           @relation("IssueCreatedBy")
+  assigned_issues       IssueAssignee[]
+  comments              Comment[]
+  activities            ActivityLog[]     @relation("ActivityActor")
+  attachments           Attachment[]
+  notifications         Notification[]    @relation("NotificationRecipient")
+  triggered_notifications Notification[]  @relation("NotificationActor")
+  sent_invites          WorkspaceInvite[]
+}
+
+// Rotating refresh tokens. One row per live token; revoked_at set on logout/rotation.
+model RefreshToken {
+  id         String    @id @default(uuid())
+  user_id    String
+  token_hash String    @unique
+  expires_at DateTime
+  revoked_at DateTime?
+  created_at DateTime  @default(now())
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+}
+
+model Workspace {
+  id         String   @id @default(uuid())
+  name       String
+  slug       String   @unique
+  owner_id   String
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  owner    User              @relation("WorkspaceOwner", fields: [owner_id], references: [id])
+  members    WorkspaceMember[]
+  projects   Project[]
+  labels     Label[]
+  issues     Issue[]
+  cycles      Cycle[]
+  modules     Module[]
+  activities  ActivityLog[]
+  attachments Attachment[]
+  notifications Notification[]
+  invites     WorkspaceInvite[]
+}
+
+model WorkspaceMember {
+  workspace_id String
+  user_id      String
+  role         WorkspaceRole @default(member)
+  created_at   DateTime      @default(now())
+  updated_at   DateTime      @updatedAt
+
+  workspace Workspace @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@id([workspace_id, user_id])
+  @@index([user_id])
+}
+
+model Project {
+  id           String   @id @default(uuid())
+  workspace_id String
+  name         String
+  identifier   String
+  description  String?
+  lead_id      String?
+  is_archived  Boolean  @default(false)
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  workspace Workspace       @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  lead      User?           @relation("ProjectLead", fields: [lead_id], references: [id])
+  members   ProjectMember[]
+  states    State[]
+  issues    Issue[]
+  labels    Label[]
+  cycles    Cycle[]
+  modules   Module[]
+
+  @@unique([workspace_id, identifier])
+  @@index([workspace_id])
+}
+
+model ProjectMember {
+  project_id String
+  user_id    String
+  role       ProjectRole @default(member)
+  created_at DateTime    @default(now())
+  updated_at DateTime    @updatedAt
+
+  project Project @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@id([project_id, user_id])
+  @@index([user_id])
+}
+
+model State {
+  id         String     @id @default(uuid())
+  project_id String
+  name       String
+  color      String
+  group      StateGroup
+  order      Int        @default(0)
+  is_default Boolean    @default(false)
+  created_at DateTime   @default(now())
+  updated_at DateTime   @updatedAt
+
+  project Project @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  issues  Issue[]
+
+  @@index([project_id])
+}
+
+model Issue {
+  id              String        @id @default(uuid())
+  workspace_id    String
+  project_id      String
+  sequence_id     Int
+  title           String
+  description     String?
+  state_id        String
+  priority        IssuePriority @default(none)
+  parent_id       String?
+  cycle_id        String?
+  estimate_points Float?
+  start_date      DateTime?
+  due_date        DateTime?
+  completed_at    DateTime?
+  created_by_id   String
+  sort_order      Float         @default(0)
+  created_at      DateTime      @default(now())
+  updated_at      DateTime      @updatedAt
+  deleted_at      DateTime?
+
+  workspace  Workspace       @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  project    Project         @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  state      State           @relation(fields: [state_id], references: [id])
+  cycle      Cycle?          @relation(fields: [cycle_id], references: [id], onDelete: SetNull)
+  created_by User            @relation("IssueCreatedBy", fields: [created_by_id], references: [id])
+  parent     Issue?          @relation("SubIssue", fields: [parent_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  children   Issue[]         @relation("SubIssue")
+  assignees        IssueAssignee[]
+  labels           IssueLabel[]
+  comments         Comment[]
+  modules          ModuleIssue[]
+  outgoing_links   IssueLink[]     @relation("IssueLinkSource")
+  incoming_links   IssueLink[]     @relation("IssueLinkTarget")
+  activities       ActivityLog[]
+  attachments      Attachment[]
+  notifications    Notification[]
+
+  @@unique([project_id, sequence_id])
+  @@index([workspace_id])
+  @@index([project_id])
+  @@index([state_id])
+  @@index([cycle_id])
+  @@index([created_by_id])
+  @@index([parent_id])
+  @@index([priority])
+  @@index([due_date])
+  @@index([deleted_at])
+}
+
+model IssueAssignee {
+  issue_id   String
+  user_id    String
+  created_at DateTime @default(now())
+
+  issue Issue @relation(fields: [issue_id], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@id([issue_id, user_id])
+  @@index([user_id])
+}
+
+// Project-scoped labels (resolved decision — not workspace-level).
+// workspace_id is denormalized for efficient multi-tenant queries.
+model Label {
+  id           String   @id @default(uuid())
+  workspace_id String
+  project_id   String
+  name         String
+  color        String
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  workspace Workspace   @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  project   Project     @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  issues    IssueLabel[]
+
+  @@index([workspace_id])
+  @@index([project_id])
+}
+
+model IssueLabel {
+  issue_id   String
+  label_id   String
+  created_at DateTime @default(now())
+
+  issue Issue @relation(fields: [issue_id], references: [id], onDelete: Cascade)
+  label Label @relation(fields: [label_id], references: [id], onDelete: Cascade)
+
+  @@id([issue_id, label_id])
+  @@index([label_id])
+}
+
+model Comment {
+  id                String    @id @default(uuid())
+  issue_id          String
+  author_id         String
+  body              String
+  parent_comment_id String?
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+  deleted_at        DateTime?
+
+  issue   Issue     @relation(fields: [issue_id], references: [id], onDelete: Cascade)
+  author  User      @relation(fields: [author_id], references: [id])
+  parent  Comment?  @relation("CommentThread", fields: [parent_comment_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  replies Comment[] @relation("CommentThread")
+
+  @@index([issue_id])
+  @@index([author_id])
+  @@index([deleted_at])
+}
+
+model Cycle {
+  id           String    @id @default(uuid())
+  workspace_id String
+  project_id   String
+  name         String
+  description  String?
+  start_date   DateTime?
+  end_date     DateTime?
+  created_at   DateTime  @default(now())
+  updated_at   DateTime  @updatedAt
+
+  workspace Workspace @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  project   Project   @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  issues    Issue[]
+
+  @@index([workspace_id])
+  @@index([project_id])
+}
+
+model Module {
+  id           String       @id @default(uuid())
+  workspace_id String
+  project_id   String
+  name         String
+  description  String?
+  status       ModuleStatus @default(backlog)
+  lead_id      String?
+  start_date   DateTime?
+  target_date  DateTime?
+  created_at   DateTime     @default(now())
+  updated_at   DateTime     @updatedAt
+
+  workspace Workspace    @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  project   Project      @relation(fields: [project_id], references: [id], onDelete: Cascade)
+  lead      User?        @relation("ModuleLead", fields: [lead_id], references: [id])
+  issues    ModuleIssue[]
+
+  @@index([workspace_id])
+  @@index([project_id])
+}
+
+model ModuleIssue {
+  module_id  String
+  issue_id   String
+  created_at DateTime @default(now())
+
+  module Module @relation(fields: [module_id], references: [id], onDelete: Cascade)
+  issue  Issue  @relation(fields: [issue_id], references: [id], onDelete: Cascade)
+
+  @@id([module_id, issue_id])
+  @@index([issue_id])
+}
+
+model IssueLink {
+  id               String        @id @default(uuid())
+  issue_id         String
+  related_issue_id String
+  relation_type    IssueLinkType
+  created_at       DateTime      @default(now())
+
+  issue         Issue @relation("IssueLinkSource", fields: [issue_id], references: [id], onDelete: Cascade)
+  related_issue Issue @relation("IssueLinkTarget", fields: [related_issue_id], references: [id], onDelete: Cascade)
+
+  @@unique([issue_id, related_issue_id, relation_type])
+  @@index([issue_id])
+  @@index([related_issue_id])
+}
+
+// Audit trail: one row per recorded change. Powers the issue history feed and
+// (Phase 3) notifications. Append-only — never updated after creation.
+model ActivityLog {
+  id           String   @id @default(uuid())
+  workspace_id String
+  issue_id     String?
+  actor_id     String
+  action       String
+  field        String?
+  old_value    String?
+  new_value    String?
+  created_at   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  issue     Issue?    @relation(fields: [issue_id], references: [id], onDelete: Cascade)
+  actor     User      @relation("ActivityActor", fields: [actor_id], references: [id])
+
+  @@index([workspace_id])
+  @@index([issue_id])
+  @@index([actor_id])
+}
+
+// File attachments on issues. Bytes live in object storage (S3/MinIO) or, for
+// local dev/test, on disk; the DB holds metadata only (TZ §5.16). `storage_key`
+// is the opaque object path the storage driver resolves; it is unique so a row
+// maps to exactly one stored object.
+model Attachment {
+  id             String   @id @default(uuid())
+  workspace_id   String
+  issue_id       String
+  uploaded_by_id String
+  file_name      String
+  file_size      Int
+  mime_type      String
+  storage_key    String   @unique
+  created_at     DateTime @default(now())
+
+  workspace   Workspace @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  issue       Issue     @relation(fields: [issue_id], references: [id], onDelete: Cascade)
+  uploaded_by User      @relation(fields: [uploaded_by_id], references: [id])
+
+  @@index([workspace_id])
+  @@index([issue_id])
+  @@index([uploaded_by_id])
+}
+
+// In-app notifications (TZ §5.18). One row per recipient per event. Created as a
+// side effect of assign / comment / mention events (the same service points that
+// write the activity trail). `actor_id` is who caused it; recipients never get a
+// notification for their own action. `issue_id` links to the subject issue so the
+// client can deep-link; `entity_id` optionally points at the comment that
+// triggered a comment/mention notification.
+model Notification {
+  id           String           @id @default(uuid())
+  workspace_id String
+  recipient_id String
+  actor_id     String
+  type         NotificationType
+  issue_id     String?
+  entity_id    String?
+  is_read      Boolean          @default(false)
+  read_at      DateTime?
+  created_at   DateTime         @default(now())
+
+  workspace Workspace @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  recipient User      @relation("NotificationRecipient", fields: [recipient_id], references: [id], onDelete: Cascade)
+  actor     User      @relation("NotificationActor", fields: [actor_id], references: [id])
+  issue     Issue?    @relation(fields: [issue_id], references: [id], onDelete: Cascade)
+
+  @@index([recipient_id, workspace_id, is_read])
+  @@index([workspace_id])
+  @@index([issue_id])
+}
+
+// Workspace invite — allows admins to invite not-yet-registered users by email.
+// On creation a unique token is generated; the invitee follows a link to accept.
+// Accepted and expired invites are retained for audit purposes.
+model WorkspaceInvite {
+  id             String        @id @default(uuid())
+  workspace_id   String
+  invited_by_id  String
+  email          String
+  role           WorkspaceRole @default(member)
+  token          String        @unique @default(uuid())
+  expires_at     DateTime
+  accepted_at    DateTime?
+  created_at     DateTime      @default(now())
+
+  workspace  Workspace @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  invited_by User      @relation(fields: [invited_by_id], references: [id])
+
+  @@index([workspace_id])
+  @@index([email])
+  @@index([token])
+}

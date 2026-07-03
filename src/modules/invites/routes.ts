@@ -1,16 +1,35 @@
 import type { FastifyInstance } from 'fastify';
 import { authenticate } from '../../plugins/auth-hook.js';
-import { getInviteSchema, acceptInviteSchema } from './schema.js';
-import { getInviteHandler, acceptInviteHandler } from './controller.js';
+import { requireWorkspaceMember } from '../../plugins/workspace-hook.js';
+import {
+  createInviteSchema,
+  listInvitesSchema,
+  revokeInviteSchema,
+  acceptInviteSchema,
+} from './schema.js';
+import {
+  createInviteHandler,
+  listInvitesHandler,
+  revokeInviteHandler,
+  acceptInviteHandler,
+} from './controller.js';
 
-export async function inviteRoutes(app: FastifyInstance): Promise<void> {
-  // Public — no auth required to inspect an invite before deciding to register/login.
-  app.get('/:token', { schema: getInviteSchema }, getInviteHandler);
+/**
+ * Workspace-scoped invite management (admin+). Registered under
+ * `/api/v1/workspaces/:workspaceSlug/invites`.
+ */
+export async function workspaceInviteRoutes(app: FastifyInstance): Promise<void> {
+  const admin = [authenticate, requireWorkspaceMember('admin')];
 
-  // Auth required — the accepting user must be logged in.
-  app.post(
-    '/:token/accept',
-    { schema: acceptInviteSchema, preHandler: [authenticate] },
-    acceptInviteHandler,
-  );
+  app.post('/', { schema: createInviteSchema, preHandler: admin }, createInviteHandler);
+  app.get('/', { schema: listInvitesSchema, preHandler: admin }, listInvitesHandler);
+  app.delete('/:inviteId', { schema: revokeInviteSchema, preHandler: admin }, revokeInviteHandler);
+}
+
+/**
+ * Public magic-link accept endpoint. No auth: the opaque token is the
+ * credential. Registered under `/api/v1/invites`.
+ */
+export async function publicInviteRoutes(app: FastifyInstance): Promise<void> {
+  app.get('/:token/accept', { schema: acceptInviteSchema }, acceptInviteHandler);
 }

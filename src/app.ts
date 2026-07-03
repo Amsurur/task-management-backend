@@ -11,7 +11,7 @@
 
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { LoggerOptions } from 'pino';
-import { config, isDev } from './config/index.js';
+import { config, isDev, isProd } from './config/index.js';
 import errorHandlerPlugin from './plugins/error-handler.js';
 import swaggerPlugin from './plugins/swagger.js';
 import prismaPlugin from './plugins/prisma.js';
@@ -31,7 +31,16 @@ import { issueRelationRoutes } from './modules/issues/relations/routes.js';
 import { activityRoutes } from './modules/activity/routes.js';
 import { attachmentRoutes, attachmentDeleteRoutes } from './modules/attachments/routes.js';
 import { notificationRoutes } from './modules/notifications/routes.js';
-import { inviteRoutes } from './modules/invites/routes.js';
+import websocket from '@fastify/websocket';
+import { workspaceInviteRoutes, publicInviteRoutes } from './modules/invites/routes.js';
+import {
+  contactRoutes,
+  conversationRoutes,
+  workspaceConversationRoutes,
+  chatWsRoutes,
+} from './modules/chat/routes.js';
+import { aiRoutes } from './modules/ai/routes.js';
+import { userRoutes } from './modules/users/routes.js';
 
 export interface BuildAppOptions {
   /** Pino logger options, or `false`/`true` to disable/enable the default logger. */
@@ -44,10 +53,23 @@ export interface BuildAppOptions {
  * everywhere else. Request IDs are enabled by Fastify out of the box (`reqId` on
  * every log line).
  */
+function isPinoPrettyAvailable(): boolean {
+  return false;
+}
+
 function defaultLogger(): LoggerOptions | boolean {
+  if (isProd) {
+    return true;
+  }
+
   const level = config.LOG_LEVEL ?? (isDev ? 'debug' : 'info');
 
-  if (isDev) {
+  // Pretty-print only in development AND only when pino-pretty is actually
+  // installed. In production it is omitted (devDependency, pruned by
+  // `npm install --omit=dev`); guarding here prevents a hard crash if the
+  // environment is misconfigured (e.g. NODE_ENV left at its development
+  // default on a production host).
+  if (isDev && isPinoPrettyAvailable()) {
     return {
       level,
       transport: {
@@ -83,6 +105,9 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   await app.register(storagePlugin);
   await app.register(authPlugin);
   await app.register(workspacePlugin);
+  // WebSocket support (chat real-time). Must be registered before any route that
+  // opts in via `{ websocket: true }`.
+  await app.register(websocket);
 
   // --- Routes ----------------------------------------------------------------
   // Liveness/readiness probe. Liveness always returns ok if the process is up;
@@ -101,6 +126,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   // Feature modules under /api/v1
   await app.register(authRoutes, { prefix: '/api/v1/auth' });
   await app.register(workspaceRoutes, { prefix: '/api/v1/workspaces' });
+  await app.register(userRoutes, { prefix: '/api/v1/users' });
   await app.register(projectRoutes, { prefix: '/api/v1/workspaces/:workspaceSlug/projects' });
   await app.register(stateRoutes, {
     prefix: '/api/v1/workspaces/:workspaceSlug/projects/:projectId/states',
@@ -135,7 +161,23 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   await app.register(notificationRoutes, {
     prefix: '/api/v1/workspaces/:workspaceSlug/notifications',
   });
-  await app.register(inviteRoutes, { prefix: '/api/v1/invites' });
+
+  // Invites — public magic-link accept + workspace-scoped management.
+  await app.register(publicInviteRoutes, { prefix: '/api/v1/invites' });
+  await app.register(workspaceInviteRoutes, {
+    prefix: '/api/v1/workspaces/:workspaceSlug/invites',
+  });
+
+  // Chat — contacts, conversations, group creation, and the real-time socket.
+  await app.register(contactRoutes, { prefix: '/api/v1/contacts' });
+  await app.register(conversationRoutes, { prefix: '/api/v1/conversations' });
+  await app.register(workspaceConversationRoutes, {
+    prefix: '/api/v1/workspaces/:workspaceSlug/conversations',
+  });
+  await app.register(chatWsRoutes, { prefix: '/api/v1/ws' });
+
+  // AI assistant — answers questions and performs actions as the authenticated user.
+  await app.register(aiRoutes, { prefix: '/api/v1/ai' });
 
   return app;
 }

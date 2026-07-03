@@ -48,6 +48,7 @@ export async function createProject(
         identifier: body.identifier,
         description: body.description,
         lead_id: body.lead_id ?? null,
+        visibility: body.visibility,
       },
     });
 
@@ -101,6 +102,7 @@ export async function updateProject(
       ...(body.name !== undefined && { name: body.name }),
       ...(body.description !== undefined && { description: body.description }),
       ...(body.lead_id !== undefined && { lead_id: body.lead_id }),
+      ...(body.visibility !== undefined && { visibility: body.visibility }),
       ...(body.is_archived !== undefined && { is_archived: body.is_archived }),
     },
   });

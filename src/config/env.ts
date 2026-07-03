@@ -39,54 +39,49 @@ export const envSchema = z
     JWT_ACCESS_TTL: duration.default('15m'),
     JWT_REFRESH_TTL: duration.default('7d'),
 
-    // --- CORS --- (comma-separated origins, or `*`; configured per environment)
-    CORS_ORIGIN: z.string().min(1).default('*'),
+  // --- CORS --- (comma-separated origins, or `*`; configured per environment)
+  CORS_ORIGIN: z.string().min(1).default('*'),
 
-    // --- Attachment storage ---
-    // `local` (default) stores bytes on disk and serves them through internal API
-    // routes; `s3` uses an S3-compatible object store (AWS S3 / MinIO) with
-    // presigned URLs. The S3_* vars are required only when STORAGE_DRIVER=s3
-    // (enforced by the superRefine below).
-    STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
-    /** Lifetime (seconds) of generated presigned upload/download URLs. */
-    STORAGE_PRESIGN_TTL: z.coerce.number().int().min(30).max(86400).default(900),
-    /** Public base URL the app is reachable at — used to build local storage URLs. */
-    PUBLIC_BASE_URL: z.string().url().default('http://localhost:3000'),
-    /** Max accepted upload size in bytes (default 25 MiB). */
-    ATTACHMENT_MAX_BYTES: z.coerce
-      .number()
-      .int()
-      .min(1)
-      .default(25 * 1024 * 1024),
+  // --- Public URL --- (used to build absolute links in emails, e.g. invite magic-links)
+  PUBLIC_BASE_URL: z.string().url().default('http://localhost:3000'),
 
-    // local driver
-    LOCAL_STORAGE_DIR: z.string().min(1).default('./uploads'),
+  // --- Storage --- (attachments). `local` writes to disk (dev/test); `s3`
+  // targets an S3-compatible object store. LOCAL_STORAGE_DIR must always be set
+  // (it has a default) because the local driver resolves it at construction.
+  STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
+  LOCAL_STORAGE_DIR: z.string().min(1).default('./storage'),
+  STORAGE_PRESIGN_TTL: z.coerce.number().int().positive().default(900),
+  // Max attachment size accepted by the upload endpoints (bytes). Default 10 MiB.
+  ATTACHMENT_MAX_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
+  S3_ENDPOINT: z.string().url().optional(),
+  S3_REGION: z.string().min(1).default('us-east-1'),
+  S3_BUCKET: z.string().min(1).optional(),
+  S3_ACCESS_KEY_ID: z.string().min(1).optional(),
+  S3_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+  S3_FORCE_PATH_STYLE: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true' || v === '1'),
 
-    // s3 driver (optional unless STORAGE_DRIVER=s3)
-    S3_ENDPOINT: z.string().url().optional(),
-    S3_REGION: z.string().min(1).default('us-east-1'),
-    S3_BUCKET: z.string().min(1).optional(),
-    S3_ACCESS_KEY_ID: z.string().min(1).optional(),
-    S3_SECRET_ACCESS_KEY: z.string().min(1).optional(),
-    /** MinIO and most non-AWS stores need path-style addressing. */
-    S3_FORCE_PATH_STYLE: z
-      .enum(['true', 'false'])
-      .default('true')
-      .transform((v) => v === 'true'),
-  })
-  .superRefine((env, ctx) => {
-    if (env.STORAGE_DRIVER === 's3') {
-      for (const key of ['S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'] as const) {
-        if (!env[key]) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: [key],
-            message: `${key} is required when STORAGE_DRIVER=s3`,
-          });
-        }
-      }
-    }
-  });
+  // --- AI assistant (Google Gemini) --- (optional; the /ai endpoints return 503
+  // with a clear message when GEMINI_API_KEY is unset, so the rest of the API is
+  // unaffected). Model defaults to gemini-2.0-flash.
+  GEMINI_API_KEY: z.string().min(1).optional(),
+  GEMINI_MODEL: z.string().min(1).default('gemini-2.0-flash'),
+
+  // --- SMTP / email --- (all optional; when host is set, real emails are sent
+  // via nodemailer, otherwise dev/test log to the console and production throws)
+  SMTP_HOST: z.string().min(1).optional(),
+  SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
+  // Coerce the usual truthy string forms; anything else (incl. unset) is false.
+  SMTP_SECURE: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true' || v === '1'),
+  SMTP_USER: z.string().min(1).optional(),
+  SMTP_PASS: z.string().min(1).optional(),
+  SMTP_FROM: z.string().min(1).optional(),
+});
 
 export type Env = z.infer<typeof envSchema>;
 
