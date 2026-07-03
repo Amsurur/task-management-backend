@@ -41,7 +41,7 @@ export const envSchema = z
       .default('true')
       .transform((v) => v === 'true'),
     GEMINI_API_KEY: z.string().min(1).optional(),
-    GEMINI_MODEL: z.string().min(1).default('gemini-2.0-flash'),
+    GEMINI_MODEL: z.string().min(1).default('gemini-2.5-flash'),
     SMTP_HOST: z.string().min(1).optional(),
     SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
     SMTP_SECURE: z

@@ -35,10 +35,12 @@ const SYSTEM_PROMPT = [
   'other. Never switch languages unless asked.',
   '',
   'Acting: when the user asks to create or change something, use the tools to',
-  'actually do it — do not just describe how. Some actions need ids: call the',
-  'list_* / find_user tools first to resolve a name or email into the id a',
-  'create_* tool needs. If a tool returns an error, read it, explain the problem',
-  'to the user in their language, and suggest a fix.',
+  'actually do it — do not just describe how. Resolve names to ids first: a',
+  'workspace is addressed by its `slug` (not its name) and a project by its id —',
+  'if the user names them, call list_workspaces / list_projects (or find_user for',
+  'people) to look up the slug/id before the create_* or list_* call. Never guess',
+  'a slug from a display name. If a tool returns an error, read it, explain the',
+  'problem in the user’s language, and suggest a fix.',
   '',
   'Style: be concise and friendly. After doing something, confirm what you did in',
   'one or two sentences. Only ask a clarifying question when you truly cannot',
@@ -90,37 +92,64 @@ function geminiFunctionDeclarations(tools: AiToolDef[]): Record<string, unknown>
   });
 }
 
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Extract the server-suggested retry delay (seconds) from a 429 body, if any. */
+function parseRetryDelayMs(body: string): number | null {
+  const m = /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(body);
+  const secs = m?.[1];
+  return secs ? Math.ceil(parseFloat(secs) * 1000) : null;
+}
+
+/**
+ * Call Gemini `generateContent`. Retries transient rate limits (429) with the
+ * server-suggested delay (or exponential backoff) so free-tier per-minute limits
+ * don't fail an otherwise-valid request.
+ */
 async function callGemini(
   apiKey: string,
   model: string,
   contents: GeminiContent[],
 ): Promise<GeminiContent> {
-  const res = await fetch(`${GEMINI_BASE}/${encodeURIComponent(model)}:generateContent`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
-    body: JSON.stringify({
-      system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
-      contents,
-      tools: [{ function_declarations: geminiFunctionDeclarations(AI_TOOLS) }],
-    }),
-  });
+  const MAX_ATTEMPTS = 4;
+  let lastMessage = 'unknown error';
 
-  const text = await res.text();
-  if (!res.ok) {
-    // Surface Gemini's own error message (e.g. bad key, unknown model).
-    let message = text;
-    try {
-      message = (JSON.parse(text) as { error?: { message?: string } }).error?.message ?? text;
-    } catch {
-      /* keep raw text */
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    const res = await fetch(`${GEMINI_BASE}/${encodeURIComponent(model)}:generateContent`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        contents,
+        tools: [{ function_declarations: geminiFunctionDeclarations(AI_TOOLS) }],
+      }),
+    });
+
+    const text = await res.text();
+
+    if (res.ok) {
+      const data = JSON.parse(text) as { candidates?: { content?: GeminiContent }[] };
+      return data.candidates?.[0]?.content ?? { role: 'model', parts: [{ text: '' }] };
     }
-    throw new AppError(502, 'SERVICE_UNAVAILABLE', `Gemini request failed: ${message}`);
+
+    try {
+      lastMessage = (JSON.parse(text) as { error?: { message?: string } }).error?.message ?? text;
+    } catch {
+      lastMessage = text;
+    }
+
+    // Retry rate limits / transient upstream errors with backoff.
+    const retryable = res.status === 429 || res.status === 503 || res.status === 500;
+    if (retryable && attempt < MAX_ATTEMPTS - 1) {
+      const delay = parseRetryDelayMs(text) ?? Math.min(1000 * 2 ** attempt, 8000);
+      await sleep(delay);
+      continue;
+    }
+
+    throw new AppError(502, 'SERVICE_UNAVAILABLE', `Gemini request failed: ${lastMessage}`);
   }
 
-  const data = JSON.parse(text) as { candidates?: { content?: GeminiContent }[] };
-  const content = data.candidates?.[0]?.content;
-  if (!content) return { role: 'model', parts: [{ text: '' }] };
-  return content;
+  throw new AppError(502, 'SERVICE_UNAVAILABLE', `Gemini request failed: ${lastMessage}`);
 }
 
 export async function aiChat(
