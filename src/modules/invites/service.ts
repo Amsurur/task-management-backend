@@ -125,6 +125,47 @@ export async function revokeInvite(
 }
 
 /**
+ * Consume an invite for a freshly-registered user. Called from the auth
+ * `register` flow after the invite has already been validated (exists, pending,
+ * unexpired, email matches). Adds the user to the workspace and marks the invite
+ * accepted. Idempotent on membership: if the user is somehow already a member we
+ * only flip the invite status.
+ */
+export async function acceptInviteAfterRegister(
+  prisma: PrismaClient,
+  token: string,
+  userId: string,
+): Promise<void> {
+  const invite = await prisma.workspaceInvite.findUnique({ where: { token } });
+  if (!invite) throw AppError.notFound('Invite not found');
+  if (invite.status !== 'pending') {
+    throw AppError.conflict('Invite is no longer pending');
+  }
+
+  const existingMembership = await prisma.workspaceMember.findUnique({
+    where: { workspace_id_user_id: { workspace_id: invite.workspace_id, user_id: userId } },
+  });
+
+  if (existingMembership) {
+    await prisma.workspaceInvite.update({
+      where: { id: invite.id },
+      data: { status: 'accepted', accepted_at: new Date() },
+    });
+    return;
+  }
+
+  await prisma.$transaction([
+    prisma.workspaceMember.create({
+      data: { workspace_id: invite.workspace_id, user_id: userId, role: invite.role },
+    }),
+    prisma.workspaceInvite.update({
+      where: { id: invite.id },
+      data: { status: 'accepted', accepted_at: new Date() },
+    }),
+  ]);
+}
+
+/**
  * Magic-link accept. Public (no auth): the token is the credential. Resolves the
  * invitee by the invite's email and, if they have a registered account, adds
  * them to the workspace. Returns a discriminated result the route renders as an

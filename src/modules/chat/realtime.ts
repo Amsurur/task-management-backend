@@ -12,9 +12,31 @@
 
 import type { WebSocket } from '@fastify/websocket';
 
-/** An event pushed to clients. `type: "message"` carries a serialized message. */
+/**
+ * An event pushed to clients over the realtime socket.
+ *  - `message`         — a new chat message (chat fan-out)
+ *  - `message_updated` — a message was edited (new body + edited_at)
+ *  - `message_deleted`  — a message was deleted (id + conversation_id)
+ *  - `reaction_added`      — an emoji reaction was added to a message
+ *  - `reaction_removed`    — an emoji reaction was removed from a message
+ *  - `conversation_updated`— a conversation was renamed or its membership changed
+ *  - `conversation_deleted`— a conversation was deleted (or the recipient left it)
+ *  - `notification`        — a serialized in-app notification (recipient-only)
+ *  - `call`                — WebRTC call signaling relayed between members
+ *  - `error`               — a problem with an inbound frame
+ */
 export interface OutboundEvent {
-  type: 'message' | 'error';
+  type:
+    | 'message'
+    | 'message_updated'
+    | 'message_deleted'
+    | 'reaction_added'
+    | 'reaction_removed'
+    | 'conversation_updated'
+    | 'conversation_deleted'
+    | 'notification'
+    | 'call'
+    | 'error';
   data: unknown;
 }
 

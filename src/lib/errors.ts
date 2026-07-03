@@ -16,6 +16,7 @@ export type ErrorCode =
   | 'CONFLICT'
   | 'GONE'
   | 'RATE_LIMITED'
+  | 'SERVICE_UNAVAILABLE'
   | 'INTERNAL_ERROR';
 
 /**

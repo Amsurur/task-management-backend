@@ -34,3 +34,8 @@ services:
         generateValue: true
       - key: JWT_REFRESH_SECRET
         generateValue: true
+      # AI-ассистент (Google Gemini). Значение задаётся вручную в дашборде Render
+      # (Environment → Add), в git не попадает. Без него /ai/chat вернёт 503,
+      # остальной API работает как обычно.
+      - key: GEMINI_API_KEY
+        sync: false

@@ -1,3 +1,9 @@
+-- Reconciling migration: the WorkspaceInvite table already exists (created by
+-- 20260701065559_add_workspace_invites) but predates the `status`/`updated_at`
+-- columns and the invite/contact/conversation enums. This migration adds those
+-- and creates the chat tables (Contact, Conversation, ConversationMember,
+-- Message). It does NOT recreate WorkspaceInvite or its indexes/FKs.
+
 -- CreateEnum
 CREATE TYPE "InviteStatus" AS ENUM ('pending', 'accepted', 'expired', 'revoked');
 
@@ -7,14 +13,10 @@ CREATE TYPE "ContactStatus" AS ENUM ('pending', 'accepted', 'declined');
 -- CreateEnum
 CREATE TYPE "ConversationType" AS ENUM ('direct', 'group');
 
--- AlterTable: "WorkspaceInvite" already exists (created in 20260701065559_add_workspace_invites).
--- Bring it in line with the current schema instead of recreating it (which caused P3009).
+-- AlterTable: bring WorkspaceInvite up to the current schema.
 ALTER TABLE "WorkspaceInvite" ADD COLUMN "status" "InviteStatus" NOT NULL DEFAULT 'pending';
 ALTER TABLE "WorkspaceInvite" ADD COLUMN "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
 ALTER TABLE "WorkspaceInvite" ALTER COLUMN "updated_at" DROP DEFAULT;
-
--- Drop the redundant non-unique token index; the schema keeps only the unique constraint.
-DROP INDEX IF EXISTS "WorkspaceInvite_token_idx";
 
 -- CreateTable
 CREATE TABLE "Contact" (

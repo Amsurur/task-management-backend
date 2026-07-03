@@ -13,8 +13,14 @@
 // notifications inside the same transaction as the mutation.
 
 import type { PrismaClient, Prisma, NotificationType } from '@prisma/client';
+import { chatHub } from '../modules/chat/realtime.js';
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
+
+/** Actor projection embedded in the realtime `notification` payload. */
+const NOTIFY_ACTOR = {
+  actor: { select: { id: true, display_name: true, avatar_url: true } },
+} as const;
 
 export interface NotificationInput {
   workspace_id: string;
@@ -36,16 +42,31 @@ export async function notify(db: DbClient, input: NotificationInput): Promise<vo
   const recipients = [...new Set(input.recipient_ids)].filter((id) => id !== input.actor_id);
   if (recipients.length === 0) return;
 
-  await db.notification.createMany({
-    data: recipients.map((recipient_id) => ({
-      workspace_id: input.workspace_id,
-      recipient_id,
-      actor_id: input.actor_id,
-      type: input.type,
-      issue_id: input.issue_id ?? null,
-      entity_id: input.entity_id ?? null,
-    })),
-  });
+  // Create one row per recipient (instead of createMany) so we get the persisted
+  // record — with its actor — back to push over the realtime socket.
+  const created = [];
+  for (const recipient_id of recipients) {
+    created.push(
+      await db.notification.create({
+        data: {
+          workspace_id: input.workspace_id,
+          recipient_id,
+          actor_id: input.actor_id,
+          type: input.type,
+          issue_id: input.issue_id ?? null,
+          entity_id: input.entity_id ?? null,
+        },
+        include: NOTIFY_ACTOR,
+      }),
+    );
+  }
+
+  // Real-time fan-out: a notification is private to its recipient, so each row is
+  // pushed only to that user's own sockets. Best-effort — if the surrounding
+  // transaction later rolls back, the client simply refetches on reconnect.
+  for (const notification of created) {
+    chatHub.broadcast([notification.recipient_id], { type: 'notification', data: notification });
+  }
 }
 
 /**

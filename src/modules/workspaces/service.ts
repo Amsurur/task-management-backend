@@ -195,7 +195,7 @@ export async function inviteMember(
     },
   });
 
-  const acceptUrl = `${config.PUBLIC_BASE_URL}/api/v1/invites/${invite.token}/accept`;
+  const acceptUrl = `${config.PUBLIC_BASE_URL}/api/v1/invites/${token}/accept`;
   await sendInviteEmail({
     to: body.email,
     workspaceName: workspace.name,
