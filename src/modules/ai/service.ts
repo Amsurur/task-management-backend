@@ -94,62 +94,93 @@ function geminiFunctionDeclarations(tools: AiToolDef[]): Record<string, unknown>
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-/** Extract the server-suggested retry delay (seconds) from a 429 body, if any. */
-function parseRetryDelayMs(body: string): number | null {
-  const m = /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(body);
-  const secs = m?.[1];
-  return secs ? Math.ceil(parseFloat(secs) * 1000) : null;
+/**
+ * Models tried in order for each request. Google's free-tier request quota is
+ * per-model, so when the primary model is exhausted we fall through to the next
+ * one — multiplying the total free capacity so the assistant keeps working far
+ * longer without billing. Configured model first, then generous fallbacks.
+ */
+function modelCandidates(): string[] {
+  const fallbacks = ['gemini-2.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-2.5-flash'];
+  return [...new Set([config.GEMINI_MODEL, ...fallbacks])];
 }
 
-/**
- * Call Gemini `generateContent`. Retries transient rate limits (429) with the
- * server-suggested delay (or exponential backoff) so free-tier per-minute limits
- * don't fail an otherwise-valid request.
- */
-async function callGemini(
+/** Server-suggested retry delay from a 429 body ("retryDelay":"5s" or "retry in 30ms"). */
+function parseRetryDelayMs(body: string): number | null {
+  const s = /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(body);
+  if (s?.[1]) return Math.ceil(parseFloat(s[1]) * 1000);
+  const ms = /retry in (\d+(?:\.\d+)?)ms/i.exec(body);
+  if (ms?.[1]) return Math.ceil(parseFloat(ms[1]));
+  const sec = /retry in (\d+(?:\.\d+)?)s/i.exec(body);
+  if (sec?.[1]) return Math.ceil(parseFloat(sec[1]) * 1000);
+  return null;
+}
+
+async function generateOnce(
   apiKey: string,
   model: string,
   contents: GeminiContent[],
-): Promise<GeminiContent> {
-  const MAX_ATTEMPTS = 4;
+): Promise<{ ok: true; content: GeminiContent } | { ok: false; status: number; message: string }> {
+  const res = await fetch(`${GEMINI_BASE}/${encodeURIComponent(model)}:generateContent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
+    body: JSON.stringify({
+      system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      contents,
+      tools: [{ function_declarations: geminiFunctionDeclarations(AI_TOOLS) }],
+    }),
+  });
+  const text = await res.text();
+  if (res.ok) {
+    const data = JSON.parse(text) as { candidates?: { content?: GeminiContent }[] };
+    return { ok: true, content: data.candidates?.[0]?.content ?? { role: 'model', parts: [{ text: '' }] } };
+  }
+  let message = text;
+  try {
+    message = (JSON.parse(text) as { error?: { message?: string } }).error?.message ?? text;
+  } catch {
+    /* keep raw text */
+  }
+  return { ok: false, status: res.status, message };
+}
+
+/**
+ * Call Gemini `generateContent`, trying each candidate model in turn. For a given
+ * model: a rate limit (429) gets one short server-suggested retry, then we move
+ * to the next model (its quota is separate); other 5xx get one backoff retry.
+ * Only fails if every model is exhausted/unavailable.
+ */
+async function callGemini(apiKey: string, contents: GeminiContent[]): Promise<GeminiContent> {
   let lastMessage = 'unknown error';
 
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
-    const res = await fetch(`${GEMINI_BASE}/${encodeURIComponent(model)}:generateContent`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
-        contents,
-        tools: [{ function_declarations: geminiFunctionDeclarations(AI_TOOLS) }],
-      }),
-    });
+  for (const model of modelCandidates()) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const r = await generateOnce(apiKey, model, contents);
+      if (r.ok) return r.content;
+      lastMessage = `${model}: ${r.message}`;
 
-    const text = await res.text();
-
-    if (res.ok) {
-      const data = JSON.parse(text) as { candidates?: { content?: GeminiContent }[] };
-      return data.candidates?.[0]?.content ?? { role: 'model', parts: [{ text: '' }] };
+      if (r.status === 429) {
+        // One quick retry on this model, then fall through to the next model.
+        if (attempt === 0) {
+          await sleep(Math.min(parseRetryDelayMs(r.message) ?? 400, 1500));
+          continue;
+        }
+        break;
+      }
+      if ((r.status === 500 || r.status === 503) && attempt === 0) {
+        await sleep(800);
+        continue;
+      }
+      // Non-retryable (bad request, auth, etc.) — surface immediately.
+      throw new AppError(502, 'SERVICE_UNAVAILABLE', `Gemini request failed: ${r.message}`);
     }
-
-    try {
-      lastMessage = (JSON.parse(text) as { error?: { message?: string } }).error?.message ?? text;
-    } catch {
-      lastMessage = text;
-    }
-
-    // Retry rate limits / transient upstream errors with backoff.
-    const retryable = res.status === 429 || res.status === 503 || res.status === 500;
-    if (retryable && attempt < MAX_ATTEMPTS - 1) {
-      const delay = parseRetryDelayMs(text) ?? Math.min(1000 * 2 ** attempt, 8000);
-      await sleep(delay);
-      continue;
-    }
-
-    throw new AppError(502, 'SERVICE_UNAVAILABLE', `Gemini request failed: ${lastMessage}`);
   }
 
-  throw new AppError(502, 'SERVICE_UNAVAILABLE', `Gemini request failed: ${lastMessage}`);
+  throw new AppError(
+    502,
+    'SERVICE_UNAVAILABLE',
+    `AI is temporarily rate-limited on all models. Please try again in a moment. (${lastMessage})`,
+  );
 }
 
 export async function aiChat(
@@ -179,7 +210,7 @@ export async function aiChat(
   const actions: AiAction[] = [];
 
   for (let step = 0; step < MAX_STEPS; step += 1) {
-    const modelTurn = await callGemini(config.GEMINI_API_KEY, config.GEMINI_MODEL, contents);
+    const modelTurn = await callGemini(config.GEMINI_API_KEY, contents);
     const calls = modelTurn.parts.filter((p) => p.functionCall);
 
     if (calls.length > 0) {
