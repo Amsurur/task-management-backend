@@ -1,6 +1,15 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
-import { ListUsersQuerySchema } from './schema.js';
-import { listUsers, getUserProfile } from './service.js';
+import { ListUsersQuerySchema, PresenceQuerySchema } from './schema.js';
+import { listUsers, getUserProfile, getPresence } from './service.js';
+
+export async function presenceHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const { ids } = PresenceQuerySchema.parse(request.query);
+  const presence = await getPresence(request.server.prisma, ids);
+  reply.send(presence);
+}
 
 export async function listUsersHandler(
   request: FastifyRequest,

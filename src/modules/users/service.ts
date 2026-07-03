@@ -8,6 +8,7 @@
 
 import type { PrismaClient } from '@prisma/client';
 import { AppError } from '../../lib/errors.js';
+import { chatHub } from '../chat/realtime.js';
 
 const publicUser = {
   id: true,
@@ -16,6 +17,29 @@ const publicUser = {
   avatar_url: true,
   created_at: true,
 } as const;
+
+export interface PresenceEntry {
+  user_id: string;
+  online: boolean;
+  last_seen_at: Date | null;
+}
+
+/**
+ * Online status for a set of users. `online` comes from live socket connections;
+ * `last_seen_at` (when offline) lets the client show "last seen 5 min ago".
+ */
+export async function getPresence(prisma: PrismaClient, ids: string[]): Promise<PresenceEntry[]> {
+  const unique = [...new Set(ids)].slice(0, 200);
+  if (unique.length === 0) return [];
+  const users = await prisma.user.findMany({
+    where: { id: { in: unique } },
+    select: { id: true, last_seen_at: true },
+  });
+  return users.map((u) => {
+    const online = chatHub.isOnline(u.id);
+    return { user_id: u.id, online, last_seen_at: online ? null : u.last_seen_at };
+  });
+}
 
 /** Directory listing — all active users, optionally filtered by name/email. */
 export async function listUsers(

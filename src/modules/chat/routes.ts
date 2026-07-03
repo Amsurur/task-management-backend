@@ -5,7 +5,7 @@ import { requireWorkspaceMember } from '../../plugins/workspace-hook.js';
 import { verifyAccessToken } from '../../lib/jwt.js';
 import { chatHub } from './realtime.js';
 import * as chatService from './service.js';
-import { WsSendFrameSchema, WsCallFrameSchema } from './schema.js';
+import { WsSendFrameSchema, WsCallFrameSchema, WsTypingFrameSchema } from './schema.js';
 import {
   sendContactRequestSchema,
   listContactRequestsSchema,
@@ -147,16 +147,36 @@ export async function chatWsRoutes(app: FastifyInstance): Promise<void> {
       return;
     }
 
-    chatHub.register(userId, socket);
+    // Register; if this is the user's first socket, announce they're online.
+    if (chatHub.register(userId, socket)) void announcePresence(app, userId, true);
 
     socket.on('message', (raw: Buffer) => {
       void handleInboundFrame(app, userId, socket, raw.toString());
     });
 
     socket.on('close', () => {
-      chatHub.unregister(userId, socket);
+      // If this was the user's last socket, mark them offline and announce it.
+      if (chatHub.unregister(userId, socket)) void announcePresence(app, userId, false);
     });
   });
+}
+
+/** Persist last-seen (on offline) and push a `presence` event to the user's peers. */
+async function announcePresence(
+  app: FastifyInstance,
+  userId: string,
+  online: boolean,
+): Promise<void> {
+  try {
+    const lastSeenAt = online ? null : await chatService.markOffline(app.prisma, userId);
+    const peers = await chatService.presencePeers(app.prisma, userId);
+    chatHub.broadcast(peers, {
+      type: 'presence',
+      data: { user_id: userId, online, last_seen_at: lastSeenAt },
+    });
+  } catch {
+    /* presence is best-effort */
+  }
 }
 
 /**
@@ -192,6 +212,23 @@ async function handleInboundFrame(
           payload: frame.payload ?? null,
         },
       });
+      return;
+    }
+
+    if (json.type === 'typing') {
+      const frame = WsTypingFrameSchema.parse(json);
+      const members = await chatService.conversationMemberIds(
+        app.prisma,
+        userId,
+        frame.conversation_id,
+      );
+      chatHub.broadcast(
+        members.filter((id) => id !== userId),
+        {
+          type: 'typing',
+          data: { conversation_id: frame.conversation_id, user_id: userId, typing: frame.typing },
+        },
+      );
       return;
     }
 

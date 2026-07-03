@@ -34,6 +34,8 @@ export interface OutboundEvent {
     | 'reaction_removed'
     | 'conversation_updated'
     | 'conversation_deleted'
+    | 'presence'
+    | 'typing'
     | 'notification'
     | 'call'
     | 'error';
@@ -41,8 +43,12 @@ export interface OutboundEvent {
 }
 
 export interface ChatHub {
-  register(userId: string, socket: WebSocket): void;
-  unregister(userId: string, socket: WebSocket): void;
+  /** Register a socket; returns true if the user just came online (first socket). */
+  register(userId: string, socket: WebSocket): boolean;
+  /** Unregister a socket; returns true if the user just went offline (last socket). */
+  unregister(userId: string, socket: WebSocket): boolean;
+  /** Whether the user currently has at least one live socket. */
+  isOnline(userId: string): boolean;
   /** Push an event to every live socket of each given user (deduplicated). */
   broadcast(userIds: string[], event: OutboundEvent): void;
 }
@@ -50,20 +56,31 @@ export interface ChatHub {
 class InProcessChatHub implements ChatHub {
   private readonly byUser = new Map<string, Set<WebSocket>>();
 
-  register(userId: string, socket: WebSocket): void {
+  register(userId: string, socket: WebSocket): boolean {
     let sockets = this.byUser.get(userId);
+    const cameOnline = !sockets || sockets.size === 0;
     if (!sockets) {
       sockets = new Set();
       this.byUser.set(userId, sockets);
     }
     sockets.add(socket);
+    return cameOnline;
   }
 
-  unregister(userId: string, socket: WebSocket): void {
+  unregister(userId: string, socket: WebSocket): boolean {
     const sockets = this.byUser.get(userId);
-    if (!sockets) return;
+    if (!sockets) return false;
     sockets.delete(socket);
-    if (sockets.size === 0) this.byUser.delete(userId);
+    if (sockets.size === 0) {
+      this.byUser.delete(userId);
+      return true;
+    }
+    return false;
+  }
+
+  isOnline(userId: string): boolean {
+    const sockets = this.byUser.get(userId);
+    return !!sockets && sockets.size > 0;
   }
 
   broadcast(userIds: string[], event: OutboundEvent): void {

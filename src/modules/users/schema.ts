@@ -23,6 +23,24 @@ export const listUsersSchema: FastifySchema = {
   },
 };
 
+export const PresenceQuerySchema = z.object({
+  ids: z
+    .string()
+    .min(1)
+    .transform((v) => v.split(',').map((s) => s.trim()).filter(Boolean)),
+});
+
+export const presenceSchema: FastifySchema = {
+  tags: ['Users'],
+  summary: 'Online status + last-seen for a comma-separated list of user ids',
+  security,
+  querystring: {
+    type: 'object',
+    required: ['ids'],
+    properties: { ids: { type: 'string', description: 'Comma-separated user ids' } },
+  },
+};
+
 export const getUserProfileSchema: FastifySchema = {
   tags: ['Users'],
   summary: "Public profile of a user, with the projects the viewer is allowed to see",

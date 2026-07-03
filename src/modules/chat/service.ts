@@ -651,6 +651,38 @@ export async function toggleReaction(
   };
 }
 
+/**
+ * Everyone who should be told when this user's online status changes: their
+ * accepted contacts plus everyone they share a conversation with. De-duplicated,
+ * excluding the user themselves.
+ */
+export async function presencePeers(prisma: PrismaClient, userId: string): Promise<string[]> {
+  const [contacts, myConvos] = await Promise.all([
+    prisma.contact.findMany({
+      where: { status: 'accepted', OR: [{ requester_id: userId }, { addressee_id: userId }] },
+      select: { requester_id: true, addressee_id: true },
+    }),
+    prisma.conversationMember.findMany({ where: { user_id: userId }, select: { conversation_id: true } }),
+  ]);
+  const members = await prisma.conversationMember.findMany({
+    where: { conversation_id: { in: myConvos.map((c) => c.conversation_id) } },
+    select: { user_id: true },
+  });
+
+  const peers = new Set<string>();
+  for (const c of contacts) peers.add(c.requester_id === userId ? c.addressee_id : c.requester_id);
+  for (const m of members) if (m.user_id !== userId) peers.add(m.user_id);
+  peers.delete(userId);
+  return [...peers];
+}
+
+/** Record when a user went offline (for "last seen"). Best-effort. */
+export async function markOffline(prisma: PrismaClient, userId: string): Promise<Date> {
+  const now = new Date();
+  await prisma.user.update({ where: { id: userId }, data: { last_seen_at: now } }).catch(() => {});
+  return now;
+}
+
 /** Resolve the member ids of a conversation the caller belongs to (for WS relay). */
 export async function conversationMemberIds(
   prisma: PrismaClient,

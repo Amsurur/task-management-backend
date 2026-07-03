@@ -99,6 +99,13 @@ export const WsCallFrameSchema = z.object({
   payload: z.unknown().optional(),
 });
 
+/** Inbound WebSocket frame: the user started/stopped typing in a conversation. */
+export const WsTypingFrameSchema = z.object({
+  type: z.literal('typing'),
+  conversation_id: z.string().uuid(),
+  typing: z.boolean().default(true),
+});
+
 export type SendContactRequestBody = z.infer<typeof SendContactRequestBodySchema>;
 export type ContactRequestsQuery = z.infer<typeof ContactRequestsQuerySchema>;
 export type CreateDirectBody = z.infer<typeof CreateDirectBodySchema>;

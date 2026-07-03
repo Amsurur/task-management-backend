@@ -105,6 +105,8 @@ model User {
   display_name  String
   avatar_url    String?
   is_active     Boolean  @default(true)
+  // Set when the user's last realtime socket disconnects; powers "last seen".
+  last_seen_at  DateTime?
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
 
