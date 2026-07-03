@@ -39,6 +39,8 @@ import {
   workspaceConversationRoutes,
   chatWsRoutes,
 } from './modules/chat/routes.js';
+import { aiRoutes } from './modules/ai/routes.js';
+import { userRoutes } from './modules/users/routes.js';
 
 export interface BuildAppOptions {
   /** Pino logger options, or `false`/`true` to disable/enable the default logger. */
@@ -124,6 +126,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   // Feature modules under /api/v1
   await app.register(authRoutes, { prefix: '/api/v1/auth' });
   await app.register(workspaceRoutes, { prefix: '/api/v1/workspaces' });
+  await app.register(userRoutes, { prefix: '/api/v1/users' });
   await app.register(projectRoutes, { prefix: '/api/v1/workspaces/:workspaceSlug/projects' });
   await app.register(stateRoutes, {
     prefix: '/api/v1/workspaces/:workspaceSlug/projects/:projectId/states',
@@ -172,6 +175,9 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
     prefix: '/api/v1/workspaces/:workspaceSlug/conversations',
   });
   await app.register(chatWsRoutes, { prefix: '/api/v1/ws' });
+
+  // AI assistant — answers questions and performs actions as the authenticated user.
+  await app.register(aiRoutes, { prefix: '/api/v1/ai' });
 
   return app;
 }

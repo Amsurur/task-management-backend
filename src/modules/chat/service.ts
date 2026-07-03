@@ -130,6 +130,60 @@ export async function listContacts(prisma: PrismaClient, userId: string): Promis
   }));
 }
 
+/**
+ * Search registered users by display name OR email (case-insensitive, partial
+ * match) so the client can find someone to add as a contact / start a chat with.
+ * Excludes the caller and deactivated accounts, and annotates each result with
+ * the current relationship so the UI can show "Add" / "Pending" / "Message".
+ */
+export async function searchUsers(
+  prisma: PrismaClient,
+  userId: string,
+  query: string,
+  limit = 20,
+): Promise<unknown[]> {
+  const q = query.trim();
+  if (!q) return [];
+
+  const users = await prisma.user.findMany({
+    where: {
+      id: { not: userId },
+      is_active: true,
+      OR: [
+        { display_name: { contains: q, mode: 'insensitive' } },
+        { email: { contains: q, mode: 'insensitive' } },
+      ],
+    },
+    select: publicUser,
+    take: limit,
+    orderBy: { display_name: 'asc' },
+  });
+  if (users.length === 0) return [];
+
+  const ids = users.map((u) => u.id);
+  const contacts = await prisma.contact.findMany({
+    where: {
+      OR: [
+        { requester_id: userId, addressee_id: { in: ids } },
+        { addressee_id: userId, requester_id: { in: ids } },
+      ],
+    },
+  });
+
+  const relationshipFor = (otherId: string): string => {
+    const c = contacts.find(
+      (row) =>
+        (row.requester_id === userId && row.addressee_id === otherId) ||
+        (row.addressee_id === userId && row.requester_id === otherId),
+    );
+    if (!c || c.status === 'declined') return 'none';
+    if (c.status === 'accepted') return 'contact';
+    return c.requester_id === userId ? 'pending_outgoing' : 'pending_incoming';
+  };
+
+  return users.map((u) => ({ ...u, relationship: relationshipFor(u.id) }));
+}
+
 /** Throw 403 unless the two users are accepted contacts. */
 async function assertAcceptedContact(prisma: PrismaClient, a: string, b: string): Promise<void> {
   const contact = await prisma.contact.findFirst({

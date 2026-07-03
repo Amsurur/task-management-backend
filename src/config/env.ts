@@ -63,6 +63,12 @@ export const envSchema = z
     .optional()
     .transform((v) => v === 'true' || v === '1'),
 
+  // --- AI assistant (Google Gemini) --- (optional; the /ai endpoints return 503
+  // with a clear message when GEMINI_API_KEY is unset, so the rest of the API is
+  // unaffected). Model defaults to gemini-2.0-flash.
+  GEMINI_API_KEY: z.string().min(1).optional(),
+  GEMINI_MODEL: z.string().min(1).default('gemini-2.0-flash'),
+
   // --- SMTP / email --- (all optional; when host is set, real emails are sent
   // via nodemailer, otherwise dev/test log to the console and production throws)
   SMTP_HOST: z.string().min(1).optional(),

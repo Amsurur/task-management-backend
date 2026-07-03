@@ -11,6 +11,11 @@ export const ContactRequestsQuerySchema = z.object({
   direction: z.enum(['incoming', 'outgoing']).default('incoming'),
 });
 
+/** Search users to add as a contact, by name or email. */
+export const SearchUsersQuerySchema = z.object({
+  q: z.string().min(1).max(100),
+});
+
 export const CreateDirectBodySchema = z.object({
   user_id: z.string().uuid(),
 });
@@ -147,6 +152,17 @@ export const listContactsSchema: FastifySchema = {
   tags: ['Chat'],
   summary: 'List accepted contacts',
   security,
+};
+
+export const searchUsersSchema: FastifySchema = {
+  tags: ['Chat'],
+  summary: 'Search users by name or email (to add as a contact / start a chat)',
+  security,
+  querystring: {
+    type: 'object',
+    required: ['q'],
+    properties: { q: { type: 'string', minLength: 1, maxLength: 100 } },
+  },
 };
 
 export const createDirectSchema: FastifySchema = {

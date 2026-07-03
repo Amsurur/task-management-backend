@@ -4,6 +4,7 @@ import { chatHub } from './realtime.js';
 import {
   SendContactRequestBodySchema,
   ContactRequestsQuerySchema,
+  SearchUsersQuerySchema,
   CreateDirectBodySchema,
   CreateGroupBodySchema,
   AddConversationMemberBodySchema,
@@ -78,6 +79,15 @@ export async function listContactsHandler(
 ): Promise<void> {
   const contacts = await chatService.listContacts(request.server.prisma, request.userId);
   reply.send(contacts);
+}
+
+export async function searchUsersHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const { q } = SearchUsersQuerySchema.parse(request.query);
+  const users = await chatService.searchUsers(request.server.prisma, request.userId, q);
+  reply.send(users);
 }
 
 // ─── Conversations ────────────────────────────────────────────────────────────

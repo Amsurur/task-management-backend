@@ -11,6 +11,7 @@ import {
   listContactRequestsSchema,
   respondContactRequestSchema,
   listContactsSchema,
+  searchUsersSchema,
   createDirectSchema,
   createGroupSchema,
   addConversationMemberSchema,
@@ -32,6 +33,7 @@ import {
   acceptContactRequestHandler,
   declineContactRequestHandler,
   listContactsHandler,
+  searchUsersHandler,
   createDirectHandler,
   createGroupHandler,
   addConversationMemberHandler,
@@ -73,6 +75,7 @@ export async function contactRoutes(app: FastifyInstance): Promise<void> {
     declineContactRequestHandler,
   );
   app.get('/', { schema: listContactsSchema, preHandler: auth }, listContactsHandler);
+  app.get('/search', { schema: searchUsersSchema, preHandler: auth }, searchUsersHandler);
 }
 
 /** Conversations — `/api/v1/conversations`. Auth only. */

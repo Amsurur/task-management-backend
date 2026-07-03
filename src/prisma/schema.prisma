@@ -22,6 +22,13 @@ enum ProjectRole {
   viewer
 }
 
+// GitHub-style project visibility: `private` (only workspace/project members can
+// see it) or `public` (any authenticated user can view it via a user's profile).
+enum ProjectVisibility {
+  private
+  public
+}
+
 enum StateGroup {
   backlog
   unstarted
@@ -181,6 +188,7 @@ model Project {
   identifier   String
   description  String?
   lead_id      String?
+  visibility   ProjectVisibility @default(private)
   is_archived  Boolean  @default(false)
   created_at   DateTime @default(now())
   updated_at   DateTime @updatedAt
