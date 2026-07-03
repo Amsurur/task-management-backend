@@ -7,8 +7,13 @@ import {
   CreateDirectBodySchema,
   CreateGroupBodySchema,
   AddConversationMemberBodySchema,
+  RenameConversationBodySchema,
   ListMessagesQuerySchema,
   SendMessageBodySchema,
+  EditMessageBodySchema,
+  ChatAttachmentBodySchema,
+  ReactionBodySchema,
+  REACTION_EMOJIS,
 } from './schema.js';
 
 // ─── Contacts ───────────────────────────────────────────────────────────────
@@ -131,6 +136,53 @@ export async function getConversationHandler(
   reply.send(conversation);
 }
 
+export async function renameConversationHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const { id } = request.params as { id: string };
+  const { name } = RenameConversationBodySchema.parse(request.body);
+  const { conversation, memberIds } = await chatService.renameConversation(
+    request.server.prisma,
+    request.userId,
+    id,
+    name,
+  );
+
+  chatHub.broadcast(memberIds, {
+    type: 'conversation_updated',
+    data: { id: conversation.id, name: conversation.name },
+  });
+  reply.send(conversation);
+}
+
+export async function deleteConversationHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const { id } = request.params as { id: string };
+  const result = await chatService.deleteConversation(request.server.prisma, request.userId, id);
+
+  if (result.action === 'deleted') {
+    // Everyone loses the conversation.
+    chatHub.broadcast(result.memberIds, {
+      type: 'conversation_deleted',
+      data: { id: result.conversation_id },
+    });
+  } else {
+    // The leaver's view removes it; remaining members see a membership change.
+    chatHub.broadcast([request.userId], {
+      type: 'conversation_deleted',
+      data: { id: result.conversation_id },
+    });
+    chatHub.broadcast(
+      result.memberIds.filter((uid) => uid !== request.userId),
+      { type: 'conversation_updated', data: { id: result.conversation_id, left_user_id: request.userId } },
+    );
+  }
+  reply.code(204).send();
+}
+
 export async function listMessagesHandler(
   request: FastifyRequest,
   reply: FastifyReply,
@@ -157,7 +209,7 @@ export async function sendMessageHandler(
     request.server.prisma,
     request.userId,
     id,
-    body.body,
+    body,
   );
 
   // Real-time fan-out to every connected member (including the sender's other
@@ -165,4 +217,92 @@ export async function sendMessageHandler(
   chatHub.broadcast(memberIds, { type: 'message', data: message });
 
   reply.code(201).send(message);
+}
+
+export async function editMessageHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const { id, messageId } = request.params as { id: string; messageId: string };
+  const body = EditMessageBodySchema.parse(request.body);
+  const { message, memberIds } = await chatService.editMessage(
+    request.server.prisma,
+    request.userId,
+    id,
+    messageId,
+    body.body,
+  );
+
+  chatHub.broadcast(memberIds, { type: 'message_updated', data: message });
+  reply.send(message);
+}
+
+export async function deleteMessageHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const { id, messageId } = request.params as { id: string; messageId: string };
+  const result = await chatService.deleteMessage(
+    request.server.prisma,
+    request.server.storage,
+    request.userId,
+    id,
+    messageId,
+  );
+
+  chatHub.broadcast(result.memberIds, {
+    type: 'message_deleted',
+    data: { id: result.id, conversation_id: result.conversation_id },
+  });
+  reply.code(204).send();
+}
+
+export async function listReactionEmojisHandler(
+  _request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  reply.send({ emojis: [...REACTION_EMOJIS] });
+}
+
+export async function reactionHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const { id, messageId } = request.params as { id: string; messageId: string };
+  const { emoji } = ReactionBodySchema.parse(request.body);
+  const result = await chatService.toggleReaction(
+    request.server.prisma,
+    request.userId,
+    id,
+    messageId,
+    emoji,
+  );
+
+  const payload = {
+    message_id: result.message_id,
+    conversation_id: result.conversation_id,
+    emoji: result.emoji,
+    user_id: result.user_id,
+  };
+  chatHub.broadcast(result.memberIds, {
+    type: result.action === 'added' ? 'reaction_added' : 'reaction_removed',
+    data: payload,
+  });
+  reply.send({ action: result.action, ...payload });
+}
+
+export async function chatAttachmentHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const { id } = request.params as { id: string };
+  const body = ChatAttachmentBodySchema.parse(request.body);
+  const result = await chatService.presignChatUpload(
+    request.server.prisma,
+    request.server.storage,
+    request.userId,
+    id,
+    body,
+  );
+  reply.code(201).send(result);
 }

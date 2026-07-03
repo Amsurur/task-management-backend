@@ -45,6 +45,24 @@ export const envSchema = z
   // --- Public URL --- (used to build absolute links in emails, e.g. invite magic-links)
   PUBLIC_BASE_URL: z.string().url().default('http://localhost:3000'),
 
+  // --- Storage --- (attachments). `local` writes to disk (dev/test); `s3`
+  // targets an S3-compatible object store. LOCAL_STORAGE_DIR must always be set
+  // (it has a default) because the local driver resolves it at construction.
+  STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
+  LOCAL_STORAGE_DIR: z.string().min(1).default('./storage'),
+  STORAGE_PRESIGN_TTL: z.coerce.number().int().positive().default(900),
+  // Max attachment size accepted by the upload endpoints (bytes). Default 10 MiB.
+  ATTACHMENT_MAX_BYTES: z.coerce.number().int().positive().default(10 * 1024 * 1024),
+  S3_ENDPOINT: z.string().url().optional(),
+  S3_REGION: z.string().min(1).default('us-east-1'),
+  S3_BUCKET: z.string().min(1).optional(),
+  S3_ACCESS_KEY_ID: z.string().min(1).optional(),
+  S3_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+  S3_FORCE_PATH_STYLE: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true' || v === '1'),
+
   // --- SMTP / email --- (all optional; when host is set, real emails are sent
   // via nodemailer, otherwise dev/test log to the console and production throws)
   SMTP_HOST: z.string().min(1).optional(),

@@ -11,7 +11,6 @@
 
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { LoggerOptions } from 'pino';
-import { createRequire } from 'node:module';
 import { config, isDev, isProd } from './config/index.js';
 import errorHandlerPlugin from './plugins/error-handler.js';
 import swaggerPlugin from './plugins/swagger.js';
@@ -28,6 +27,10 @@ import { issueRoutes } from './modules/issues/routes.js';
 import { commentRoutes } from './modules/comments/routes.js';
 import { cycleRoutes } from './modules/cycles/routes.js';
 import { moduleRoutes } from './modules/modules/routes.js';
+import { issueRelationRoutes } from './modules/issues/relations/routes.js';
+import { activityRoutes } from './modules/activity/routes.js';
+import { attachmentRoutes, attachmentDeleteRoutes } from './modules/attachments/routes.js';
+import { notificationRoutes } from './modules/notifications/routes.js';
 import websocket from '@fastify/websocket';
 import { workspaceInviteRoutes, publicInviteRoutes } from './modules/invites/routes.js';
 import {
@@ -48,6 +51,10 @@ export interface BuildAppOptions {
  * everywhere else. Request IDs are enabled by Fastify out of the box (`reqId` on
  * every log line).
  */
+function isPinoPrettyAvailable(): boolean {
+  return false;
+}
+
 function defaultLogger(): LoggerOptions | boolean {
   if (isProd) {
     return true;
@@ -151,7 +158,6 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   await app.register(notificationRoutes, {
     prefix: '/api/v1/workspaces/:workspaceSlug/notifications',
   });
-  await app.register(inviteRoutes, { prefix: '/api/v1/invites' });
 
   // Invites — public magic-link accept + workspace-scoped management.
   await app.register(publicInviteRoutes, { prefix: '/api/v1/invites' });

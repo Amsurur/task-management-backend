@@ -1,5 +1,7 @@
-import type { PrismaClient, Contact, Conversation, Message } from '@prisma/client';
+import type { PrismaClient, Contact, Conversation, Message, MessageKind } from '@prisma/client';
 import { AppError } from '../../lib/errors.js';
+import { config } from '../../config/index.js';
+import { buildChatStorageKey, type PresignedUpload, type StorageDriver } from '../../lib/storage.js';
 import type { CreateGroupBody } from './schema.js';
 
 // Public projection of a user — never leaks password_hash etc.
@@ -13,6 +15,17 @@ export interface MessageWithSender extends Message {
 export interface CreatedMessage {
   message: MessageWithSender;
   memberIds: string[];
+}
+
+/** Payload for creating a message — a text body, an attachment, or both. */
+export interface SendMessageInput {
+  kind?: MessageKind;
+  body?: string;
+  attachment_key?: string | null;
+  attachment_name?: string | null;
+  attachment_size?: number | null;
+  attachment_mime?: string | null;
+  attachment_duration?: number | null;
 }
 
 // ─── Contacts ───────────────────────────────────────────────────────────────
@@ -295,6 +308,61 @@ export async function getConversation(
   };
 }
 
+/**
+ * Rename a group conversation (edit chat). Direct chats have no name and cannot
+ * be renamed. Returns the updated conversation and members to notify
+ * (event: `conversation_updated`).
+ */
+export async function renameConversation(
+  prisma: PrismaClient,
+  userId: string,
+  conversationId: string,
+  name: string,
+): Promise<{ conversation: Conversation; memberIds: string[] }> {
+  const conversation = await assertConversationMember(prisma, userId, conversationId);
+  if (conversation.type !== 'group') {
+    throw AppError.badRequest('Only group conversations can be renamed');
+  }
+  const updated = await prisma.conversation.update({
+    where: { id: conversationId },
+    data: { name, updated_at: new Date() },
+  });
+  return { conversation: updated, memberIds: await memberIds(prisma, conversationId) };
+}
+
+/** Outcome of deleting/leaving a conversation, for the real-time event. */
+export interface DeleteConversationResult {
+  action: 'deleted' | 'left';
+  conversation_id: string;
+  /** Every member at the time of the call (before deletion/leave). */
+  memberIds: string[];
+}
+
+/**
+ * Delete a conversation or leave it:
+ *  - direct chat, or a group you created → the whole conversation is deleted
+ *    (cascades to members, messages and reactions);
+ *  - a group you did not create → you simply leave (your membership is removed).
+ */
+export async function deleteConversation(
+  prisma: PrismaClient,
+  userId: string,
+  conversationId: string,
+): Promise<DeleteConversationResult> {
+  const conversation = await assertConversationMember(prisma, userId, conversationId);
+  const members = await memberIds(prisma, conversationId);
+
+  if (conversation.type === 'group' && conversation.created_by_id !== userId) {
+    await prisma.conversationMember.delete({
+      where: { conversation_id_user_id: { conversation_id: conversationId, user_id: userId } },
+    });
+    return { action: 'left', conversation_id: conversationId, memberIds: members };
+  }
+
+  await prisma.conversation.delete({ where: { id: conversationId } });
+  return { action: 'deleted', conversation_id: conversationId, memberIds: members };
+}
+
 export async function listMessages(
   prisma: PrismaClient,
   userId: string,
@@ -306,7 +374,10 @@ export async function listMessages(
 
   const messages = await prisma.message.findMany({
     where: { conversation_id: conversationId },
-    include: { sender: { select: publicUser } },
+    include: {
+      sender: { select: publicUser },
+      reactions: { select: { emoji: true, user_id: true } },
+    },
     // Newest → oldest. Tiebreak on id so the cursor is deterministic.
     orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
     take: limit + 1,
@@ -330,13 +401,23 @@ export async function createMessage(
   prisma: PrismaClient,
   senderId: string,
   conversationId: string,
-  body: string,
+  input: SendMessageInput,
 ): Promise<CreatedMessage> {
   await assertConversationMember(prisma, senderId, conversationId);
 
   const [message] = await prisma.$transaction([
     prisma.message.create({
-      data: { conversation_id: conversationId, sender_id: senderId, body },
+      data: {
+        conversation_id: conversationId,
+        sender_id: senderId,
+        kind: input.kind ?? 'text',
+        body: input.body ?? '',
+        attachment_key: input.attachment_key ?? null,
+        attachment_name: input.attachment_name ?? null,
+        attachment_size: input.attachment_size ?? null,
+        attachment_mime: input.attachment_mime ?? null,
+        attachment_duration: input.attachment_duration ?? null,
+      },
       include: { sender: { select: publicUser } },
     }),
     prisma.conversation.update({
@@ -345,10 +426,183 @@ export async function createMessage(
     }),
   ]);
 
+  return { message, memberIds: await memberIds(prisma, conversationId) };
+}
+
+/** The user ids of every member of a conversation (for real-time fan-out). */
+async function memberIds(prisma: PrismaClient, conversationId: string): Promise<string[]> {
   const members = await prisma.conversationMember.findMany({
     where: { conversation_id: conversationId },
     select: { user_id: true },
   });
+  return members.map((m) => m.user_id);
+}
 
-  return { message, memberIds: members.map((m) => m.user_id) };
+/** Fetch a message and assert it belongs to the conversation and the sender. */
+async function assertOwnMessage(
+  prisma: PrismaClient,
+  senderId: string,
+  conversationId: string,
+  messageId: string,
+): Promise<Message> {
+  const message = await prisma.message.findFirst({
+    where: { id: messageId, conversation_id: conversationId },
+  });
+  if (!message || message.deleted_at) throw AppError.notFound('Message not found');
+  if (message.sender_id !== senderId) {
+    throw AppError.forbidden('You can only modify your own messages');
+  }
+  return message;
+}
+
+/**
+ * Edit the text/caption of a message the caller sent. Sets `edited_at`. Returns
+ * the updated message and the members to notify (event: `message_updated`).
+ */
+export async function editMessage(
+  prisma: PrismaClient,
+  senderId: string,
+  conversationId: string,
+  messageId: string,
+  body: string,
+): Promise<CreatedMessage> {
+  await assertConversationMember(prisma, senderId, conversationId);
+  await assertOwnMessage(prisma, senderId, conversationId, messageId);
+
+  const message = await prisma.message.update({
+    where: { id: messageId },
+    data: { body, edited_at: new Date() },
+    include: { sender: { select: publicUser } },
+  });
+
+  return { message, memberIds: await memberIds(prisma, conversationId) };
+}
+
+/** A deleted message reference, for the `message_deleted` real-time event. */
+export interface DeletedMessage {
+  id: string;
+  conversation_id: string;
+  memberIds: string[];
+}
+
+/**
+ * Soft-delete a message the caller sent: clears its body/attachment metadata,
+ * stamps `deleted_at`, and removes the stored object (if any). Returns the id +
+ * members to notify (event: `message_deleted`).
+ */
+export async function deleteMessage(
+  prisma: PrismaClient,
+  storage: StorageDriver,
+  senderId: string,
+  conversationId: string,
+  messageId: string,
+): Promise<DeletedMessage> {
+  await assertConversationMember(prisma, senderId, conversationId);
+  const message = await assertOwnMessage(prisma, senderId, conversationId, messageId);
+
+  await prisma.message.update({
+    where: { id: messageId },
+    data: {
+      deleted_at: new Date(),
+      body: '',
+      attachment_key: null,
+      attachment_name: null,
+      attachment_size: null,
+      attachment_mime: null,
+      attachment_duration: null,
+    },
+  });
+
+  if (message.attachment_key) {
+    await storage.delete(message.attachment_key);
+  }
+
+  return { id: messageId, conversation_id: conversationId, memberIds: await memberIds(prisma, conversationId) };
+}
+
+/**
+ * Presign an upload for a chat attachment. The caller must be a member of the
+ * conversation. Returns the opaque `storage_key` (which the client passes back to
+ * `createMessage`) and the presigned upload instruction.
+ */
+export async function presignChatUpload(
+  prisma: PrismaClient,
+  storage: StorageDriver,
+  senderId: string,
+  conversationId: string,
+  input: { file_name: string; file_size: number; mime_type: string },
+): Promise<{ storage_key: string; upload: PresignedUpload }> {
+  await assertConversationMember(prisma, senderId, conversationId);
+  if (input.file_size > config.ATTACHMENT_MAX_BYTES) {
+    throw AppError.badRequest(
+      `file_size exceeds the maximum allowed (${config.ATTACHMENT_MAX_BYTES} bytes)`,
+    );
+  }
+  const storage_key = buildChatStorageKey(conversationId, input.file_name);
+  const upload = await storage.presignUpload(storage_key, input.mime_type);
+  return { storage_key, upload };
+}
+
+/** Outcome of toggling an emoji reaction, for the real-time event. */
+export interface ReactionResult {
+  action: 'added' | 'removed';
+  message_id: string;
+  conversation_id: string;
+  emoji: string;
+  user_id: string;
+  memberIds: string[];
+}
+
+/**
+ * Toggle an emoji reaction on a message (Telegram-style tap-to-react): if the
+ * caller already reacted with this emoji it is removed, otherwise it is added.
+ * Broadcast as `reaction_added` / `reaction_removed` to every member.
+ */
+export async function toggleReaction(
+  prisma: PrismaClient,
+  userId: string,
+  conversationId: string,
+  messageId: string,
+  emoji: string,
+): Promise<ReactionResult> {
+  await assertConversationMember(prisma, userId, conversationId);
+
+  const message = await prisma.message.findFirst({
+    where: { id: messageId, conversation_id: conversationId, deleted_at: null },
+    select: { id: true },
+  });
+  if (!message) throw AppError.notFound('Message not found');
+
+  const key = { message_id_user_id_emoji: { message_id: messageId, user_id: userId, emoji } };
+  const existing = await prisma.messageReaction.findUnique({ where: key });
+
+  let action: 'added' | 'removed';
+  if (existing) {
+    await prisma.messageReaction.delete({ where: key });
+    action = 'removed';
+  } else {
+    await prisma.messageReaction.create({
+      data: { message_id: messageId, user_id: userId, emoji },
+    });
+    action = 'added';
+  }
+
+  return {
+    action,
+    message_id: messageId,
+    conversation_id: conversationId,
+    emoji,
+    user_id: userId,
+    memberIds: await memberIds(prisma, conversationId),
+  };
+}
+
+/** Resolve the member ids of a conversation the caller belongs to (for WS relay). */
+export async function conversationMemberIds(
+  prisma: PrismaClient,
+  userId: string,
+  conversationId: string,
+): Promise<string[]> {
+  await assertConversationMember(prisma, userId, conversationId);
+  return memberIds(prisma, conversationId);
 }

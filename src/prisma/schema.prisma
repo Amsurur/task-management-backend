@@ -64,6 +64,31 @@ enum ConversationType {
   group
 }
 
+// Kind of a chat message: plain text or a media/file attachment.
+enum MessageKind {
+  text
+  image
+  video
+  audio
+  voice
+  file
+}
+
+enum IssueLinkType {
+  blocks
+  blocked_by
+  relates_to
+  duplicates
+}
+
+// In-app notification kinds (TZ §5.18). Generated as a side effect of the
+// events that already write the activity trail.
+enum NotificationType {
+  issue_assigned
+  comment_added
+  mentioned
+}
+
 // ─── Models ──────────────────────────────────────────────────────────────────
 
 model User {
@@ -85,6 +110,10 @@ model User {
   created_issues        Issue[]           @relation("IssueCreatedBy")
   assigned_issues       IssueAssignee[]
   comments              Comment[]
+  activities              ActivityLog[]     @relation("ActivityActor")
+  attachments             Attachment[]
+  notifications           Notification[]    @relation("NotificationRecipient")
+  triggered_notifications Notification[]    @relation("NotificationActor")
 
   created_invites       WorkspaceInvite[]     @relation("InviteCreatedBy")
   contact_requests_sent     Contact[]         @relation("ContactRequester")
@@ -92,6 +121,7 @@ model User {
   created_conversations Conversation[]        @relation("ConversationCreatedBy")
   conversation_members  ConversationMember[]
   sent_messages         Message[]
+  message_reactions     MessageReaction[]
 }
 
 // Rotating refresh tokens. One row per live token; revoked_at set on logout/rotation.
@@ -125,6 +155,9 @@ model Workspace {
   modules  Module[]
   invites  WorkspaceInvite[]
   conversations Conversation[]
+  activities    ActivityLog[]
+  attachments   Attachment[]
+  notifications Notification[]
 }
 
 model WorkspaceMember {
@@ -436,15 +469,134 @@ model ConversationMember {
 }
 
 model Message {
-  id              String   @id @default(uuid())
+  id              String      @id @default(uuid())
   conversation_id String
   sender_id       String
-  body            String
-  created_at      DateTime @default(now())
+  kind            MessageKind @default(text)
+  // Text body, or the caption for a media message. Empty for pure attachments.
+  body            String      @default("")
+  // Attachment metadata (null for plain text). Bytes live in object storage under
+  // `attachment_key`; the rest is shown by the client without a download.
+  attachment_key      String?
+  attachment_name     String?
+  attachment_size     Int?
+  attachment_mime     String?
+  // Playback length in seconds for voice/audio/video messages.
+  attachment_duration Int?
+  edited_at       DateTime?
+  deleted_at      DateTime?
+  created_at      DateTime    @default(now())
 
-  conversation Conversation @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
-  sender       User         @relation(fields: [sender_id], references: [id], onDelete: Cascade)
+  conversation Conversation      @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+  sender       User              @relation(fields: [sender_id], references: [id], onDelete: Cascade)
+  reactions    MessageReaction[]
 
   @@index([conversation_id, created_at])
   @@index([sender_id])
+}
+
+// An emoji reaction on a message. A user may react with several distinct emojis
+// to the same message, but not the same emoji twice (composite primary key).
+model MessageReaction {
+  message_id String
+  user_id    String
+  emoji      String
+  created_at DateTime @default(now())
+
+  message Message @relation(fields: [message_id], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@id([message_id, user_id, emoji])
+  @@index([message_id])
+  @@index([user_id])
+}
+
+// ─── Issue links, activity, attachments, notifications ───────────────────────
+
+// Directed relation between two issues (blocks / relates_to / duplicates …).
+model IssueLink {
+  id               String        @id @default(uuid())
+  issue_id         String
+  related_issue_id String
+  relation_type    IssueLinkType
+  created_at       DateTime      @default(now())
+
+  issue         Issue @relation("IssueLinkSource", fields: [issue_id], references: [id], onDelete: Cascade)
+  related_issue Issue @relation("IssueLinkTarget", fields: [related_issue_id], references: [id], onDelete: Cascade)
+
+  @@unique([issue_id, related_issue_id, relation_type])
+  @@index([issue_id])
+  @@index([related_issue_id])
+}
+
+// Audit trail: one row per recorded change. Powers the issue history feed and
+// notifications. Append-only — never updated after creation.
+model ActivityLog {
+  id           String   @id @default(uuid())
+  workspace_id String
+  issue_id     String?
+  actor_id     String
+  action       String
+  field        String?
+  old_value    String?
+  new_value    String?
+  created_at   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  issue     Issue?    @relation(fields: [issue_id], references: [id], onDelete: Cascade)
+  actor     User      @relation("ActivityActor", fields: [actor_id], references: [id])
+
+  @@index([workspace_id])
+  @@index([issue_id])
+  @@index([actor_id])
+}
+
+// File attachments on issues. Bytes live in object storage (S3/MinIO) or, for
+// local dev/test, on disk; the DB holds metadata only. `storage_key` is the
+// opaque object path the storage driver resolves; unique so a row maps to
+// exactly one stored object.
+model Attachment {
+  id             String   @id @default(uuid())
+  workspace_id   String
+  issue_id       String
+  uploaded_by_id String
+  file_name      String
+  file_size      Int
+  mime_type      String
+  storage_key    String   @unique
+  created_at     DateTime @default(now())
+
+  workspace   Workspace @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  issue       Issue     @relation(fields: [issue_id], references: [id], onDelete: Cascade)
+  uploaded_by User      @relation(fields: [uploaded_by_id], references: [id])
+
+  @@index([workspace_id])
+  @@index([issue_id])
+  @@index([uploaded_by_id])
+}
+
+// In-app notifications (TZ §5.18). One row per recipient per event, created as a
+// side effect of assign / comment / mention events. `actor_id` is who caused it
+// (never notified about their own action); `issue_id` deep-links the subject;
+// `entity_id` optionally points at the triggering comment.
+model Notification {
+  id           String           @id @default(uuid())
+  workspace_id String
+  recipient_id String
+  actor_id     String
+  type         NotificationType
+  issue_id     String?
+  entity_id    String?
+  is_read      Boolean          @default(false)
+  read_at      DateTime?
+  created_at   DateTime         @default(now())
+
+  workspace Workspace @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
+  recipient User      @relation("NotificationRecipient", fields: [recipient_id], references: [id], onDelete: Cascade)
+  actor     User      @relation("NotificationActor", fields: [actor_id], references: [id])
+  issue     Issue?    @relation(fields: [issue_id], references: [id], onDelete: Cascade)
+
+  @@index([recipient_id, workspace_id, is_read])
+  @@index([workspace_id])
+  @@index([issue_id])
 }
