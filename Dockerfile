@@ -10,7 +10,7 @@ WORKDIR /app
 # OpenSSL is required by Prisma's query engine.
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm install
 
 # --- build -------------------------------------------------------------------
 FROM deps AS build
@@ -25,7 +25,9 @@ ENV NODE_ENV=production
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+# Prod deps only, plus the Prisma CLI (a devDependency) so `migrate deploy`
+# can run at startup against the production database.
+RUN npm install --omit=dev && npm install prisma@5.22.0
 
 # Compiled app + generated Prisma client + schema (needed for migrate deploy).
 COPY --from=build /app/dist ./dist
@@ -35,4 +37,10 @@ COPY --from=build /app/src/prisma ./src/prisma
 
 USER node
 EXPOSE 3000
-CMD ["node", "dist/server.js"]
+# One-time self-heal: an earlier broken build left migration 20260702120000 in a
+# failed state (P3009), which blocks `migrate deploy`. Mark it rolled back (its DDL
+# already rolled back in-transaction) so the corrected version re-applies. The `|| true`
+# makes this a no-op once the migration is applied — safe to leave, but can be removed
+# after the first successful deploy.
+# Then apply pending migrations against the production DB and start the server.
+CMD ["sh", "-c", "npx prisma migrate resolve --rolled-back 20260702120000_add_invites_and_chat --schema=src/prisma/schema.prisma || true; npx prisma migrate deploy --schema=src/prisma/schema.prisma && node dist/server.js"]

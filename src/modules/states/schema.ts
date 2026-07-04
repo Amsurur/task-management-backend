@@ -108,8 +108,10 @@ export const deleteStateSchema: FastifySchema = {
   summary: 'Delete a state; issues are reassigned to the specified or default state (admin+)',
   security,
   params: stateParams,
+  // Body is optional: without a transfer target, issues move to the default
+  // state. `null`/absent must be accepted (not every client sends a body).
   body: {
-    type: 'object',
+    type: ['object', 'null'],
     properties: { transfer_to_state_id: { type: 'string', format: 'uuid' } },
   },
   response: { 204: { type: 'null' } },

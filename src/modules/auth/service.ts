@@ -66,6 +66,7 @@ export async function register(prisma: PrismaClient, body: RegisterBody): Promis
     data: { email: body.email, password_hash, display_name: body.display_name },
   });
 
+  // Auto-join the workspace the invite is for, so the invitee lands inside it.
   if (body.invite_token) {
     await acceptInviteAfterRegister(prisma, body.invite_token, user.id);
   }
