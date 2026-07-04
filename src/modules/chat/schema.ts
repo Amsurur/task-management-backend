@@ -88,23 +88,48 @@ export const WsSendFrameSchema = z.object({
 });
 
 /**
+ * The web client wraps call/typing frame fields in a `data` envelope
+ * (`{ type, data: { action, conversation_id, ... } }`) — the same shape the
+ * server uses for its *outbound* events. Older/other clients send the fields
+ * flat. This lifts a `data` object up to the top level so a single schema
+ * accepts both shapes; a frame without `data` passes through unchanged.
+ */
+const liftDataEnvelope = (v: unknown): unknown => {
+  if (v && typeof v === 'object' && !Array.isArray(v)) {
+    const obj = v as Record<string, unknown>;
+    const data = obj.data;
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      const { data: _drop, ...rest } = obj;
+      return { ...rest, ...(data as Record<string, unknown>) };
+    }
+  }
+  return v;
+};
+
+/**
  * Inbound WebSocket frame carrying WebRTC call signaling. The server relays it to
  * the other conversation member(s) as a `call` event. Payload is opaque (SDP
  * offer/answer or an ICE candidate); the server never inspects it.
  */
-export const WsCallFrameSchema = z.object({
-  type: z.literal('call'),
-  action: z.enum(['offer', 'answer', 'ice', 'hangup', 'reject']),
-  conversation_id: z.string().uuid(),
-  payload: z.unknown().optional(),
-});
+export const WsCallFrameSchema = z.preprocess(
+  liftDataEnvelope,
+  z.object({
+    type: z.literal('call'),
+    action: z.enum(['offer', 'answer', 'ice', 'hangup', 'reject']),
+    conversation_id: z.string().uuid(),
+    payload: z.unknown().optional(),
+  }),
+);
 
 /** Inbound WebSocket frame: the user started/stopped typing in a conversation. */
-export const WsTypingFrameSchema = z.object({
-  type: z.literal('typing'),
-  conversation_id: z.string().uuid(),
-  typing: z.boolean().default(true),
-});
+export const WsTypingFrameSchema = z.preprocess(
+  liftDataEnvelope,
+  z.object({
+    type: z.literal('typing'),
+    conversation_id: z.string().uuid(),
+    typing: z.boolean().default(true),
+  }),
+);
 
 export type SendContactRequestBody = z.infer<typeof SendContactRequestBodySchema>;
 export type ContactRequestsQuery = z.infer<typeof ContactRequestsQuerySchema>;
