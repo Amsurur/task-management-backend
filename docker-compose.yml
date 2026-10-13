@@ -73,6 +73,7 @@ services:
       JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-15m}
       JWT_REFRESH_TTL: ${JWT_REFRESH_TTL:-7d}
       CORS_ORIGIN: ${CORS_ORIGIN:-*}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
       # Attachment storage. Defaults to local disk; set STORAGE_DRIVER=s3 to use MinIO.
       STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
       STORAGE_PRESIGN_TTL: ${STORAGE_PRESIGN_TTL:-900}

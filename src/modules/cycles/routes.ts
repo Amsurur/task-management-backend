@@ -22,23 +22,24 @@ import {
 
 export async function cycleRoutes(app: FastifyInstance): Promise<void> {
   const member = [authenticate, requireWorkspaceMember()];
+  const writer = [authenticate, requireWorkspaceMember('member')];
 
   app.get('/', { schema: listCyclesSchema, preHandler: member }, listCyclesHandler);
-  app.post('/', { schema: createCycleSchema, preHandler: member }, createCycleHandler);
+  app.post('/', { schema: createCycleSchema, preHandler: writer }, createCycleHandler);
 
   app.get('/:cycleId', { schema: getCycleSchema, preHandler: member }, getCycleHandler);
-  app.patch('/:cycleId', { schema: updateCycleSchema, preHandler: member }, updateCycleHandler);
-  app.delete('/:cycleId', { schema: deleteCycleSchema, preHandler: member }, deleteCycleHandler);
+  app.patch('/:cycleId', { schema: updateCycleSchema, preHandler: writer }, updateCycleHandler);
+  app.delete('/:cycleId', { schema: deleteCycleSchema, preHandler: writer }, deleteCycleHandler);
 
   // Issue membership
   app.post(
     '/:cycleId/issues',
-    { schema: addIssuesToCycleSchema, preHandler: member },
+    { schema: addIssuesToCycleSchema, preHandler: writer },
     addIssuesToCycleHandler,
   );
   app.delete(
     '/:cycleId/issues/:issueId',
-    { schema: removeIssueFromCycleSchema, preHandler: member },
+    { schema: removeIssueFromCycleSchema, preHandler: writer },
     removeIssueFromCycleHandler,
   );
 }

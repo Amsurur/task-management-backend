@@ -4,7 +4,7 @@ import { config } from '../../config/index.js';
 import { AppError } from '../../lib/errors.js';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../../lib/jwt.js';
 import { acceptInviteAfterRegister } from '../invites/service.js';
-import type { RegisterBody, LoginBody, UpdateMeBody } from './schema.js';
+import type { RegisterBody, LoginBody, UpdateMeBody, ChangePasswordBody } from './schema.js';
 
 export interface AuthTokens {
   access_token: string;
@@ -94,15 +94,22 @@ export async function refresh(prisma: PrismaClient, rawToken: string): Promise<A
     throw AppError.unauthorized('Invalid or expired refresh token');
   }
 
-  const stored = await prisma.refreshToken.findUnique({ where: { id: payload.jti } });
-  if (!stored || stored.revoked_at !== null || stored.expires_at < new Date()) {
-    throw AppError.unauthorized('Refresh token has been revoked or expired');
-  }
+  // Atomic revoke: only one concurrent caller can flip revoked_at from null,
+  // so a refresh token can be redeemed exactly once.
+  const { count } = await prisma.refreshToken.updateMany({
+    where: {
+      id: payload.jti,
+      user_id: payload.sub,
+      revoked_at: null,
+      expires_at: { gt: new Date() },
+    },
+    data: { revoked_at: new Date() },
+  });
+  if (count !== 1) throw AppError.unauthorized('Refresh token has been revoked or expired');
 
-  const user = await prisma.user.findUniqueOrThrow({ where: { id: payload.sub } });
-
-  // Rotate: revoke the old token record, then issue a fresh pair.
-  await prisma.refreshToken.update({ where: { id: stored.id }, data: { revoked_at: new Date() } });
+  const user = await prisma.user.findUnique({ where: { id: payload.sub } });
+  if (!user) throw AppError.unauthorized('Invalid or expired refresh token');
+  if (!user.is_active) throw AppError.forbidden('This account has been deactivated');
 
   return issueTokenPair(prisma, user);
 }
@@ -119,6 +126,28 @@ export async function logout(prisma: PrismaClient, rawToken: string): Promise<vo
     where: { id: jti, revoked_at: null },
     data: { revoked_at: new Date() },
   });
+}
+
+export async function changePassword(
+  prisma: PrismaClient,
+  userId: string,
+  body: ChangePasswordBody,
+): Promise<void> {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw AppError.notFound('User not found');
+
+  const valid = await argon2.verify(user.password_hash, body.current_password).catch(() => false);
+  if (!valid) throw AppError.unauthorized('Current password is incorrect');
+
+  const password_hash = await argon2.hash(body.new_password);
+  await prisma.$transaction([
+    prisma.user.update({ where: { id: userId }, data: { password_hash } }),
+    // Sign out everywhere: every outstanding refresh token is revoked.
+    prisma.refreshToken.updateMany({
+      where: { user_id: userId, revoked_at: null },
+      data: { revoked_at: new Date() },
+    }),
+  ]);
 }
 
 export async function getMe(prisma: PrismaClient, userId: string): Promise<SafeUser> {

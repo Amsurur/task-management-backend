@@ -5,6 +5,7 @@ import {
   LoginBodySchema,
   RefreshBodySchema,
   UpdateMeBodySchema,
+  ChangePasswordBodySchema,
 } from './schema.js';
 
 export async function registerHandler(request: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -43,4 +44,13 @@ export async function updateMeHandler(request: FastifyRequest, reply: FastifyRep
   const body = UpdateMeBodySchema.parse(request.body);
   const user = await authService.updateMe(request.server.prisma, request.userId, body);
   reply.send(user);
+}
+
+export async function changePasswordHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const body = ChangePasswordBodySchema.parse(request.body);
+  await authService.changePassword(request.server.prisma, request.userId, body);
+  reply.code(204).send();
 }

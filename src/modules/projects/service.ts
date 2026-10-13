@@ -3,7 +3,7 @@ import { AppError } from '../../lib/errors.js';
 import type { CreateProjectBody, UpdateProjectBody, AddProjectMemberBody } from './schema.js';
 
 /** Default workflow states seeded for every new project. */
-const DEFAULT_STATES = [
+export const DEFAULT_STATES = [
   { name: 'Backlog', color: '#6B7280', group: 'backlog' as const, order: 0 },
   { name: 'Todo', color: '#374151', group: 'unstarted' as const, order: 1, is_default: true },
   { name: 'In Progress', color: '#3B82F6', group: 'started' as const, order: 2 },

@@ -22,23 +22,24 @@ import {
 
 export async function moduleRoutes(app: FastifyInstance): Promise<void> {
   const member = [authenticate, requireWorkspaceMember()];
+  const writer = [authenticate, requireWorkspaceMember('member')];
 
   app.get('/', { schema: listModulesSchema, preHandler: member }, listModulesHandler);
-  app.post('/', { schema: createModuleSchema, preHandler: member }, createModuleHandler);
+  app.post('/', { schema: createModuleSchema, preHandler: writer }, createModuleHandler);
 
   app.get('/:moduleId', { schema: getModuleSchema, preHandler: member }, getModuleHandler);
-  app.patch('/:moduleId', { schema: updateModuleSchema, preHandler: member }, updateModuleHandler);
-  app.delete('/:moduleId', { schema: deleteModuleSchema, preHandler: member }, deleteModuleHandler);
+  app.patch('/:moduleId', { schema: updateModuleSchema, preHandler: writer }, updateModuleHandler);
+  app.delete('/:moduleId', { schema: deleteModuleSchema, preHandler: writer }, deleteModuleHandler);
 
   // Issue membership
   app.post(
     '/:moduleId/issues',
-    { schema: addIssuesToModuleSchema, preHandler: member },
+    { schema: addIssuesToModuleSchema, preHandler: writer },
     addIssuesToModuleHandler,
   );
   app.delete(
     '/:moduleId/issues/:issueId',
-    { schema: removeIssueFromModuleSchema, preHandler: member },
+    { schema: removeIssueFromModuleSchema, preHandler: writer },
     removeIssueFromModuleHandler,
   );
 }

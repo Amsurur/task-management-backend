@@ -42,6 +42,9 @@ export const envSchema = z
     // --- CORS --- (comma-separated origins, or `*`; configured per environment)
     CORS_ORIGIN: z.string().min(1).default('*'),
 
+    /** Frontend base URL — used to build links in emails (e.g. workspace invites). */
+    FRONTEND_URL: z.string().url().default('http://localhost:5173'),
+
     // --- Attachment storage ---
     // `local` (default) stores bytes on disk and serves them through internal API
     // routes; `s3` uses an S3-compatible object store (AWS S3 / MinIO) with

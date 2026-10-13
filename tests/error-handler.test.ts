@@ -9,6 +9,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import errorHandlerPlugin from '../src/plugins/error-handler.js';
+import { Prisma } from '@prisma/client';
 import { AppError } from '../src/lib/errors.js';
 
 let app: FastifyInstance;
@@ -19,6 +20,25 @@ beforeAll(async () => {
 
   app.get('/boom-app-error', async () => {
     throw AppError.notFound('Issue not found');
+  });
+  app.get('/boom-p2002', async () => {
+    throw new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+      code: 'P2002',
+      clientVersion: 'test',
+      meta: { target: ['slug'] },
+    });
+  });
+  app.get('/boom-p2025', async () => {
+    throw new Prisma.PrismaClientKnownRequestError('Record not found', {
+      code: 'P2025',
+      clientVersion: 'test',
+    });
+  });
+  app.get('/boom-p2003', async () => {
+    throw new Prisma.PrismaClientKnownRequestError('Foreign key failed', {
+      code: 'P2003',
+      clientVersion: 'test',
+    });
   });
   app.get('/boom-unexpected', async () => {
     throw new Error('kaboom: secret internal detail');
@@ -49,6 +69,22 @@ describe('error handler', () => {
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
     expect(res.body.error.details).toBeDefined();
+  });
+
+  it('maps Prisma P2002 to 409 CONFLICT', async () => {
+    const res = await request(app.server).get('/boom-p2002');
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('CONFLICT');
+    expect(res.body.error.details).toEqual({ target: ['slug'] });
+  });
+
+  it('maps Prisma P2025 to 404 and P2003 to 400', async () => {
+    const nf = await request(app.server).get('/boom-p2025');
+    expect(nf.status).toBe(404);
+    expect(nf.body.error.code).toBe('NOT_FOUND');
+    const fk = await request(app.server).get('/boom-p2003');
+    expect(fk.status).toBe(400);
+    expect(fk.body.error.code).toBe('BAD_REQUEST');
   });
 
   it('hides internal detail on unexpected errors and returns a request id', async () => {
