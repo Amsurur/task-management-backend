@@ -6,6 +6,7 @@ import {
   AddMemberBodySchema,
   ChangeMemberRoleBodySchema,
   InviteMemberBodySchema,
+  TransferOwnershipBodySchema,
 } from './schema.js';
 
 export async function listWorkspacesHandler(
@@ -121,4 +122,30 @@ export async function inviteMemberHandler(
     body,
   );
   reply.code(201).send(invite);
+}
+
+export async function leaveWorkspaceHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  await workspaceService.leaveWorkspace(
+    request.server.prisma,
+    request.workspace.id,
+    request.userId,
+  );
+  reply.code(204).send();
+}
+
+export async function transferOwnershipHandler(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
+  const body = TransferOwnershipBodySchema.parse(request.body);
+  const workspace = await workspaceService.transferOwnership(
+    request.server.prisma,
+    request.workspace.id,
+    request.userId,
+    body,
+  );
+  reply.send(workspace);
 }

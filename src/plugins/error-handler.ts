@@ -5,6 +5,7 @@
 //   - AppError                  → its own status/code/message/details
 //   - Fastify schema validation → 400 VALIDATION_ERROR with the failing fields
 //   - ZodError                  → 400 VALIDATION_ERROR with flattened issues
+//   - Prisma P2002/P2025/P2003  → 409 CONFLICT / 404 NOT_FOUND / 400 BAD_REQUEST
 //   - other errors w/ <500      → passed through (e.g. 429 from rate-limit)
 //   - everything else           → 500 INTERNAL_ERROR, full detail logged not leaked
 //
@@ -14,6 +15,7 @@
 import fp from 'fastify-plugin';
 import type { FastifyError, FastifyInstance } from 'fastify';
 import { ZodError } from 'zod';
+import { Prisma } from '@prisma/client';
 import { AppError, toEnvelope } from '../lib/errors.js';
 
 async function errorHandlerPlugin(app: FastifyInstance): Promise<void> {
@@ -23,6 +25,23 @@ async function errorHandlerPlugin(app: FastifyInstance): Promise<void> {
       return reply
         .status(error.statusCode)
         .send(toEnvelope(error.code, error.message, error.details));
+    }
+
+    // Prisma known request errors → client-facing HTTP codes.
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      if (error.code === 'P2002') {
+        return reply
+          .status(409)
+          .send(toEnvelope('CONFLICT', 'Resource already exists', { target: error.meta?.target }));
+      }
+      if (error.code === 'P2025') {
+        return reply.status(404).send(toEnvelope('NOT_FOUND', 'Resource not found'));
+      }
+      if (error.code === 'P2003') {
+        return reply
+          .status(400)
+          .send(toEnvelope('BAD_REQUEST', 'Invalid reference to a related resource'));
+      }
     }
 
     // Fastify request-schema validation failures.

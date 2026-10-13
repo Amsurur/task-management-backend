@@ -16,17 +16,18 @@ import {
 
 export async function commentRoutes(app: FastifyInstance): Promise<void> {
   const member = [authenticate, requireWorkspaceMember()];
+  const writer = [authenticate, requireWorkspaceMember('member')];
 
   app.get('/', { schema: listCommentsSchema, preHandler: member }, listCommentsHandler);
-  app.post('/', { schema: createCommentSchema, preHandler: member }, createCommentHandler);
+  app.post('/', { schema: createCommentSchema, preHandler: writer }, createCommentHandler);
   app.patch(
     '/:commentId',
-    { schema: updateCommentSchema, preHandler: member },
+    { schema: updateCommentSchema, preHandler: writer },
     updateCommentHandler,
   );
   app.delete(
     '/:commentId',
-    { schema: deleteCommentSchema, preHandler: member },
+    { schema: deleteCommentSchema, preHandler: writer },
     deleteCommentHandler,
   );
 }

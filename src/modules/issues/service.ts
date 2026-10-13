@@ -66,7 +66,10 @@ async function resolveIssue(
   return issue;
 }
 
-/** Next sequence_id for a project — use inside a serializable transaction. */
+/**
+ * Next sequence_id for a project. Callers must hold the per-project advisory lock
+ * (see `createIssue`) so concurrent creations cannot read the same max.
+ */
 async function nextSequenceId(
   prisma: Prisma.TransactionClient,
   projectId: string,
@@ -232,7 +235,27 @@ export async function createIssue(
       throw AppError.badRequest('Sub-issues cannot have sub-issues (single level only)');
   }
 
+  const assigneeIds = [...new Set(body.assignee_ids ?? [])];
+  const labelIds = [...new Set(body.label_ids ?? [])];
+
+  if (assigneeIds.length) {
+    const count = await prisma.workspaceMember.count({
+      where: { workspace_id: workspaceId, user_id: { in: assigneeIds } },
+    });
+    if (count !== assigneeIds.length)
+      throw AppError.badRequest('All assignees must be workspace members');
+  }
+  if (labelIds.length) {
+    const count = await prisma.label.count({
+      where: { project_id: projectId, id: { in: labelIds } },
+    });
+    if (count !== labelIds.length)
+      throw AppError.badRequest('All labels must belong to this project');
+  }
+
   return prisma.$transaction(async (tx) => {
+    // Serialize issue creation per project for the duration of this transaction.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${projectId}))`;
     const sequenceId = await nextSequenceId(tx, projectId);
 
     const issue = await tx.issue.create({
@@ -249,11 +272,11 @@ export async function createIssue(
         due_date: body.due_date ? new Date(body.due_date) : null,
         estimate_points: body.estimate_points ?? null,
         created_by_id: creatorId,
-        assignees: body.assignee_ids?.length
-          ? { createMany: { data: body.assignee_ids.map((uid) => ({ user_id: uid })) } }
+        assignees: assigneeIds.length
+          ? { createMany: { data: assigneeIds.map((uid) => ({ user_id: uid })) } }
           : undefined,
-        labels: body.label_ids?.length
-          ? { createMany: { data: body.label_ids.map((lid) => ({ label_id: lid })) } }
+        labels: labelIds.length
+          ? { createMany: { data: labelIds.map((lid) => ({ label_id: lid })) } }
           : undefined,
       },
       include: INCLUDE_RELATIONS,
@@ -272,7 +295,7 @@ export async function createIssue(
       workspace_id: workspaceId,
       actor_id: creatorId,
       type: 'issue_assigned',
-      recipient_ids: body.assignee_ids ?? [],
+      recipient_ids: assigneeIds,
       issue_id: issue.id,
     });
 
@@ -316,6 +339,13 @@ export async function updateIssue(
     if (!parent) throw AppError.badRequest('parent_id does not exist in this project');
     if (parent.parent_id)
       throw AppError.badRequest('Sub-issues cannot have sub-issues (single level only)');
+    const childCount = await prisma.issue.count({
+      where: { parent_id: issueId, deleted_at: null },
+    });
+    if (childCount > 0)
+      throw AppError.badRequest(
+        'An issue that has sub-issues cannot become a sub-issue (single level only)',
+      );
   }
 
   const completedAt = body.state_id
@@ -406,6 +436,11 @@ export async function addAssignee(
 ): Promise<IssueWithRelations> {
   await resolveProject(prisma, workspaceId, projectId);
   await resolveIssue(prisma, projectId, issueId);
+
+  const membership = await prisma.workspaceMember.findUnique({
+    where: { workspace_id_user_id: { workspace_id: workspaceId, user_id: userId } },
+  });
+  if (!membership) throw AppError.badRequest('Assignee must be a workspace member');
 
   const existing = await prisma.issueAssignee.findUnique({
     where: { issue_id_user_id: { issue_id: issueId, user_id: userId } },

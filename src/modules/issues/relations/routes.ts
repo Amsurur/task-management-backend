@@ -10,12 +10,13 @@ import {
 
 export async function issueRelationRoutes(app: FastifyInstance): Promise<void> {
   const member = [authenticate, requireWorkspaceMember()];
+  const writer = [authenticate, requireWorkspaceMember('member')];
 
   app.get('/', { schema: listRelationsSchema, preHandler: member }, listRelationsHandler);
-  app.post('/', { schema: createRelationSchema, preHandler: member }, createRelationHandler);
+  app.post('/', { schema: createRelationSchema, preHandler: writer }, createRelationHandler);
   app.delete(
     '/:linkId',
-    { schema: deleteRelationSchema, preHandler: member },
+    { schema: deleteRelationSchema, preHandler: writer },
     deleteRelationHandler,
   );
 }

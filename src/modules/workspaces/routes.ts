@@ -12,6 +12,8 @@ import {
   changeMemberRoleSchema,
   removeMemberSchema,
   inviteMemberSchema,
+  leaveWorkspaceSchema,
+  transferOwnershipSchema,
 } from './schema.js';
 import {
   listWorkspacesHandler,
@@ -24,6 +26,8 @@ import {
   changeMemberRoleHandler,
   removeMemberHandler,
   inviteMemberHandler,
+  leaveWorkspaceHandler,
+  transferOwnershipHandler,
 } from './controller.js';
 
 export async function workspaceRoutes(app: FastifyInstance): Promise<void> {
@@ -101,5 +105,21 @@ export async function workspaceRoutes(app: FastifyInstance): Promise<void> {
       preHandler: [authenticate, requireWorkspaceMember('admin')],
     },
     inviteMemberHandler,
+  );
+  app.post(
+    '/:workspaceSlug/leave',
+    {
+      schema: leaveWorkspaceSchema,
+      preHandler: [authenticate, requireWorkspaceMember()],
+    },
+    leaveWorkspaceHandler,
+  );
+  app.post(
+    '/:workspaceSlug/transfer-ownership',
+    {
+      schema: transferOwnershipSchema,
+      preHandler: [authenticate, requireWorkspaceMember('owner')],
+    },
+    transferOwnershipHandler,
   );
 }

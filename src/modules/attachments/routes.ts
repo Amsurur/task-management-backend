@@ -12,19 +12,20 @@ import {
 // (`.../issues/:issueId/attachments`).
 export async function attachmentRoutes(app: FastifyInstance): Promise<void> {
   const member = [authenticate, requireWorkspaceMember()];
+  const writer = [authenticate, requireWorkspaceMember('member')];
 
   app.get('/', { schema: listAttachmentsSchema, preHandler: member }, listAttachmentsHandler);
-  app.post('/', { schema: createAttachmentSchema, preHandler: member }, createAttachmentHandler);
+  app.post('/', { schema: createAttachmentSchema, preHandler: writer }, createAttachmentHandler);
 }
 
 // Delete is addressed by attachment id at the project level
 // (`.../projects/:projectId/attachments/:attachmentId`).
 export async function attachmentDeleteRoutes(app: FastifyInstance): Promise<void> {
-  const member = [authenticate, requireWorkspaceMember()];
+  const writer = [authenticate, requireWorkspaceMember('member')];
 
   app.delete(
     '/:attachmentId',
-    { schema: deleteAttachmentSchema, preHandler: member },
+    { schema: deleteAttachmentSchema, preHandler: writer },
     deleteAttachmentHandler,
   );
 }

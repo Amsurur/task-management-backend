@@ -32,10 +32,15 @@ export const ChangeMemberRoleBodySchema = z.object({
 });
 
 export const InviteMemberBodySchema = z.object({
-  email: z.string().email(),
+  email: z.string().trim().toLowerCase().email(),
   role: z.enum(['admin', 'member', 'guest']).default('member'),
 });
 
+export const TransferOwnershipBodySchema = z.object({
+  user_id: z.string().uuid(),
+});
+
+export type TransferOwnershipBody = z.infer<typeof TransferOwnershipBodySchema>;
 export type CreateWorkspaceBody = z.infer<typeof CreateWorkspaceBodySchema>;
 export type UpdateWorkspaceBody = z.infer<typeof UpdateWorkspaceBodySchema>;
 export type AddMemberBody = z.infer<typeof AddMemberBodySchema>;
@@ -211,4 +216,25 @@ export const inviteMemberSchema: FastifySchema = {
     },
   },
   response: { 201: inviteShape },
+};
+
+export const leaveWorkspaceSchema: FastifySchema = {
+  tags: ['Workspaces'],
+  summary: 'Leave the workspace (any member except the owner)',
+  security,
+  params: { type: 'object', properties: { workspaceSlug: { type: 'string' } } },
+  response: { 204: { type: 'null' } },
+};
+
+export const transferOwnershipSchema: FastifySchema = {
+  tags: ['Workspaces'],
+  summary: 'Transfer workspace ownership to another member (owner only)',
+  security,
+  params: { type: 'object', properties: { workspaceSlug: { type: 'string' } } },
+  body: {
+    type: 'object',
+    required: ['user_id'],
+    properties: { user_id: { type: 'string', format: 'uuid' } },
+  },
+  response: { 200: workspaceShape },
 };

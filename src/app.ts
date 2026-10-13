@@ -5,11 +5,14 @@
 // separate from listening lets tests build an app and drive it via injection
 // without binding a port.
 //
-// Plugins, hooks and feature modules register here. For now this is the bare
-// skeleton (logging + a single liveness route); base plugins (error handler,
-// swagger, etc.) and the `/api/v1` module tree land in subsequent Phase 0/1 tasks.
+// Plugins, hooks and feature modules register here: error handler, security
+// plugins (CORS, helmet, rate limiting), swagger, prisma/storage decorators,
+// auth + workspace hooks, then the `/api/v1` module tree.
 
 import Fastify, { type FastifyInstance } from 'fastify';
+import cors from '@fastify/cors';
+import helmet from '@fastify/helmet';
+import rateLimit from '@fastify/rate-limit';
 import type { LoggerOptions } from 'pino';
 import { config, isDev } from './config/index.js';
 import errorHandlerPlugin from './plugins/error-handler.js';
@@ -76,8 +79,30 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   // Order matters: the error handler is installed first so any later failure is
   // rendered as the standard envelope; swagger registers before routes so it can
   // capture their schemas; prisma decorates `app.prisma`. Security plugins
-  // (helmet, cors, rate-limit) are added in the Phase 4 hardening pass.
+  // (cors, helmet, rate-limit) come right after the error handler so their
+  // failures (e.g. 429) are rendered as the standard envelope.
   await app.register(errorHandlerPlugin);
+
+  await app.register(cors, {
+    origin:
+      config.CORS_ORIGIN === '*'
+        ? true
+        : config.CORS_ORIGIN.split(',')
+            .map((o) => o.trim())
+            .filter(Boolean),
+    credentials: true,
+  });
+
+  // CSP is disabled: Swagger UI relies on inline scripts/styles that a strict
+  // CSP would block. This is a JSON API, so CSP adds little here.
+  await app.register(helmet, { contentSecurityPolicy: false });
+
+  // Global default limit; auth routes override with a stricter per-route
+  // `config.rateLimit`. Skipped in tests so suites aren't throttled.
+  if (config.NODE_ENV !== 'test') {
+    await app.register(rateLimit, { global: true, max: 300, timeWindow: '1 minute' });
+  }
+
   await app.register(swaggerPlugin);
   await app.register(prismaPlugin);
   await app.register(storagePlugin);

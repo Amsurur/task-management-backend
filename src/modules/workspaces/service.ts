@@ -8,6 +8,7 @@ import type {
   AddMemberBody,
   ChangeMemberRoleBody,
   InviteMemberBody,
+  TransferOwnershipBody,
 } from './schema.js';
 
 export async function listWorkspaces(prisma: PrismaClient, userId: string): Promise<Workspace[]> {
@@ -134,13 +135,62 @@ export async function removeMember(
   if (!member) throw AppError.notFound('Member not found');
   if (member.role === 'owner') throw AppError.forbidden('Cannot remove the workspace owner');
   if (targetUserId === requesterId) {
-    throw AppError.forbidden(
-      'Use the leave-workspace endpoint to remove yourself (not implemented yet)',
-    );
+    throw AppError.forbidden('Use POST /workspaces/:workspaceSlug/leave to remove yourself');
   }
 
   await prisma.workspaceMember.delete({
     where: { workspace_id_user_id: { workspace_id: workspaceId, user_id: targetUserId } },
+  });
+}
+
+export async function leaveWorkspace(
+  prisma: PrismaClient,
+  workspaceId: string,
+  userId: string,
+): Promise<void> {
+  const member = await prisma.workspaceMember.findUnique({
+    where: { workspace_id_user_id: { workspace_id: workspaceId, user_id: userId } },
+  });
+  if (!member) throw AppError.notFound('Member not found');
+  if (member.role === 'owner') throw AppError.forbidden('Transfer ownership before leaving');
+
+  await prisma.$transaction([
+    prisma.projectMember.deleteMany({
+      where: { user_id: userId, project: { workspace_id: workspaceId } },
+    }),
+    prisma.workspaceMember.delete({
+      where: { workspace_id_user_id: { workspace_id: workspaceId, user_id: userId } },
+    }),
+  ]);
+}
+
+export async function transferOwnership(
+  prisma: PrismaClient,
+  workspaceId: string,
+  currentOwnerId: string,
+  body: TransferOwnershipBody,
+): Promise<Workspace> {
+  if (body.user_id === currentOwnerId) {
+    throw AppError.badRequest('You are already the owner of this workspace');
+  }
+  const target = await prisma.workspaceMember.findUnique({
+    where: { workspace_id_user_id: { workspace_id: workspaceId, user_id: body.user_id } },
+  });
+  if (!target) throw AppError.notFound('Target user is not a member of this workspace');
+
+  return prisma.$transaction(async (tx) => {
+    await tx.workspaceMember.update({
+      where: { workspace_id_user_id: { workspace_id: workspaceId, user_id: body.user_id } },
+      data: { role: 'owner' },
+    });
+    await tx.workspaceMember.update({
+      where: { workspace_id_user_id: { workspace_id: workspaceId, user_id: currentOwnerId } },
+      data: { role: 'admin' },
+    });
+    return tx.workspace.update({
+      where: { id: workspaceId },
+      data: { owner_id: body.user_id },
+    });
   });
 }
 
@@ -192,7 +242,7 @@ export async function inviteMember(
     },
   });
 
-  const inviteUrl = `${config.PUBLIC_BASE_URL}/invites/${invite.token}`;
+  const inviteUrl = `${config.FRONTEND_URL}/invites/${invite.token}`;
   await sendInviteEmail({
     to: body.email,
     workspaceName: workspace.name,

@@ -3,9 +3,14 @@ import type { FastifySchema } from 'fastify';
 
 // ─── Zod validators ──────────────────────────────────────────────────────────
 
+/** Emails are case-insensitive: trim + lowercase before validating. */
+const emailField = z.string().trim().toLowerCase().email();
+
+const passwordField = z.string().min(8, 'Password must be at least 8 characters');
+
 export const RegisterBodySchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8, 'Password must be at least 8 characters'),
+  email: emailField,
+  password: passwordField,
   display_name: z.string().min(1).max(100),
   // Clients (e.g. HTML forms) often send an empty string when the user leaves
   // the invite field blank. Treat "" / whitespace as "no invite" so a normal
@@ -17,12 +22,17 @@ export const RegisterBodySchema = z.object({
 });
 
 export const LoginBodySchema = z.object({
-  email: z.string().email(),
+  email: emailField,
   password: z.string().min(1),
 });
 
 export const RefreshBodySchema = z.object({
   refresh_token: z.string().min(1),
+});
+
+export const ChangePasswordBodySchema = z.object({
+  current_password: z.string().min(1),
+  new_password: passwordField,
 });
 
 export const UpdateMeBodySchema = z.object({
@@ -33,6 +43,7 @@ export const UpdateMeBodySchema = z.object({
 export type RegisterBody = z.infer<typeof RegisterBodySchema>;
 export type LoginBody = z.infer<typeof LoginBodySchema>;
 export type RefreshBody = z.infer<typeof RefreshBodySchema>;
+export type ChangePasswordBody = z.infer<typeof ChangePasswordBodySchema>;
 export type UpdateMeBody = z.infer<typeof UpdateMeBodySchema>;
 
 // ─── Fastify route schemas (for OpenAPI + request validation) ─────────────────
@@ -145,4 +156,21 @@ export const updateMeRouteSchema: FastifySchema = {
     },
   },
   response: { 200: userShape },
+};
+
+export const changePasswordRouteSchema: FastifySchema = {
+  tags: ['Auth'],
+  summary: 'Change the current password (revokes all refresh tokens)',
+  security: [{ bearerAuth: [] }],
+  body: {
+    type: 'object',
+    required: ['current_password', 'new_password'],
+    properties: {
+      current_password: { type: 'string', minLength: 1 },
+      new_password: { type: 'string', minLength: 8 },
+    },
+  },
+  response: {
+    204: { type: 'null', description: 'Password changed' },
+  },
 };
